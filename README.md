@@ -67,7 +67,15 @@ docker compose pull && docker compose up -d
 ```
 
 Serves the app and API on port `8080`, with the database in the `forklift-data`
-volume. To roll back or pin a build, set the tag:
+volume. If that port is taken on the host, set `FORKLIFT_PORT` — a `.env` file
+next to the compose file is the version that survives later restarts:
+
+```bash
+echo FORKLIFT_PORT=8095 > .env
+```
+
+Only the host side moves; the container still listens on 8080, which is where
+its health check looks. To roll back or pin a build, set the tag:
 
 ```bash
 FORKLIFT_TAG=sha-<full-commit-sha> docker compose up -d

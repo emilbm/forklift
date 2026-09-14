@@ -7,6 +7,11 @@
 # than the latest build:
 #
 #   FORKLIFT_TAG=sha-<full-sha> docker compose up -d
+#
+# Set FORKLIFT_PORT if 8080 is taken on the host. Easiest is a .env file next to
+# this one, so it survives every later `docker compose up`:
+#
+#   echo FORKLIFT_PORT=8095 > .env
 
 services:
   forklift:
@@ -14,9 +19,12 @@ services:
     container_name: forklift
     restart: unless-stopped
     ports:
+      # Host port only on the left: the container always listens on 8080, and its
+      # health check looks for it there.
+      #
       # LAN only. Point a Cloudflare tunnel at this for outside access, and put
       # Cloudflare Access in front of it — the app itself has no authentication.
-      - "8080:8080"
+      - "${FORKLIFT_PORT:-8080}:8080"
     volumes:
       # Named volume by default. Swap for a bind mount (- /srv/forklift:/data)
       # if it's easier to fold into the host's backup job.
