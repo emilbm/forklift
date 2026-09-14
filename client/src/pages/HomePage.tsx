@@ -7,12 +7,14 @@ import {
   useActiveSession,
   useEquipment,
   useExercises,
+  usePlates,
   useRegimens,
   useSessionHistory,
 } from '../queries';
 
 export default function HomePage() {
   const equipment = useEquipment();
+  const plates = usePlates();
   const exercises = useExercises();
   const regimens = useRegimens();
   const active = useActiveSession();
@@ -44,6 +46,13 @@ export default function HomePage() {
       to: '/equipment',
     },
     {
+      // Only worth asking for once something is actually loaded with plates.
+      done: (plates.data ?? []).length > 0,
+      label: 'Add the plates you own',
+      to: '/equipment',
+      skip: !(equipment.data ?? []).some((item) => item.usesPlates),
+    },
+    {
       done: (exercises.data ?? []).length > 0,
       label: 'Add the exercises you do',
       to: '/exercises',
@@ -54,7 +63,8 @@ export default function HomePage() {
       to: '/regimens',
     },
   ];
-  const setupComplete = steps.every((step) => step.done);
+  const visibleSteps = steps.filter((step) => !step.skip);
+  const setupComplete = visibleSteps.every((step) => step.done);
 
   return (
     <>
@@ -94,8 +104,8 @@ export default function HomePage() {
                 <h2 className="section-title">Get set up</h2>
                 <div className="card card--flush">
                   <div className="list">
-                    {steps.map((step) => (
-                      <Link key={step.to} to={step.to} className="list__row">
+                    {visibleSteps.map((step) => (
+                      <Link key={step.label} to={step.to} className="list__row">
                         <span
                           className={`chip${step.done ? ' chip--good' : ''}`}
                           style={{ width: 26, height: 26, justifyContent: 'center', padding: 0 }}

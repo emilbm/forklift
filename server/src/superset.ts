@@ -1,69 +1,106 @@
-import type { Equipment, Exercise, SupersetConflict } from '../../shared/types.js';
+import type { Equipment, Exercise, SupersetConflict, SupersetPair } from '../../shared/types.js';
+import { planLoads, type PlateStock } from './plates.js';
 
 /**
- * Two exercises can be supersetted only if performing them back to back needs no
- * equipment to be re-rigged. That rules out two cases:
+ * Two exercises can be supersetted only if you can go from one to the other
+ * without re-rigging anything. That rules out two cases:
  *
  *  1. They need the same physical piece of equipment.
- *  2. Their equipment draws plates from the same pool — a barbell and an ez-bar
- *     sharing one set of plates can't both stay loaded, so you'd be stripping and
- *     re-loading plates between every set.
+ *  2. Their bars can't both be loaded at once from the plates you own — the
+ *     plates would have to come off one bar to go on the other.
+ *
+ * The second case depends on the weights, not just the equipment: a 60 kg
+ * deadlift (20 kg bar + 2×20) and an 18.5 kg ez-bar curl (8.5 kg bar + 2×5) sit
+ * side by side quite happily, while two heavy bars will fight over the same
+ * plates. Weights come from the last time each exercise was performed; with no
+ * history there is nothing to check, and the pair is reported as untested
+ * rather than guessed at.
  */
-export function supersetConflicts(
-  a: Exercise,
-  b: Exercise,
+export interface SupersetInput {
+  exercise: Exercise;
+  /** Working weight to assume, from history. Null when the exercise is new. */
+  weightKg: number | null;
+}
+
+export function supersetPair(
+  a: SupersetInput,
+  b: SupersetInput,
   equipmentById: Map<number, Equipment>,
-): SupersetConflict[] {
+  stock: PlateStock[],
+): SupersetPair {
   const conflicts: SupersetConflict[] = [];
 
-  const shared = a.equipmentIds.filter((id) => b.equipmentIds.includes(id));
-  for (const id of shared) {
-    const item = equipmentById.get(id);
+  for (const id of a.exercise.equipmentIds.filter((id) => b.exercise.equipmentIds.includes(id))) {
     conflicts.push({
       reason: 'equipment',
       equipmentIds: [id],
-      platePoolId: item?.platePoolId ?? null,
-      detail: `Both exercises need ${item?.name ?? `equipment #${id}`}.`,
+      detail: `Both exercises need ${equipmentById.get(id)?.name ?? `equipment #${id}`}.`,
     });
   }
 
-  for (const aId of a.equipmentIds) {
-    for (const bId of b.equipmentIds) {
-      if (aId === bId) continue; // already reported as an equipment clash
-      const aItem = equipmentById.get(aId);
-      const bItem = equipmentById.get(bId);
-      const pool = aItem?.platePoolId;
-      if (pool == null || pool !== bItem?.platePoolId) continue;
-      conflicts.push({
-        reason: 'plate-pool',
-        equipmentIds: [aId, bId],
-        platePoolId: pool,
-        detail: `${aItem?.name} and ${bItem?.name} share the same plates.`,
-      });
-    }
-  }
+  const platesConflict = platesCannotCoexist(a, b, equipmentById, stock);
+  if (platesConflict) conflicts.push(platesConflict);
 
-  return conflicts;
+  return {
+    exerciseIds: [a.exercise.id, b.exercise.id],
+    compatible: conflicts.length === 0,
+    conflicts,
+    basis: [
+      { exerciseId: a.exercise.id, weightKg: a.weightKg },
+      { exerciseId: b.exercise.id, weightKg: b.weightKg },
+    ],
+  };
 }
 
-export interface SupersetPair {
-  exerciseIds: [number, number];
-  compatible: boolean;
-  conflicts: SupersetConflict[];
+/** The plate-loaded bar an exercise uses, if it has one. */
+function platedBar(exercise: Exercise, equipmentById: Map<number, Equipment>): Equipment | null {
+  for (const id of exercise.equipmentIds) {
+    const item = equipmentById.get(id);
+    if (item?.usesPlates) return item;
+  }
+  return null;
+}
+
+function platesCannotCoexist(
+  a: SupersetInput,
+  b: SupersetInput,
+  equipmentById: Map<number, Equipment>,
+  stock: PlateStock[],
+): SupersetConflict | null {
+  const barA = platedBar(a.exercise, equipmentById);
+  const barB = platedBar(b.exercise, equipmentById);
+  if (!barA || !barB) return null; // at most one draws on the plates
+  if (barA.id === barB.id) return null; // one bar can't hold two loads — already a clash
+  if (a.weightKg === null || b.weightKg === null) return null; // nothing to check against
+
+  const outcome = planLoads(
+    [
+      { key: a.exercise.id, barWeightKg: barA.barWeightKg, targetKg: a.weightKg },
+      { key: b.exercise.id, barWeightKg: barB.barWeightKg, targetKg: b.weightKg },
+    ],
+    stock,
+  );
+  if (outcome.feasible) return null;
+
+  return {
+    reason: 'plates',
+    equipmentIds: [barA.id, barB.id],
+    detail:
+      `Not enough plates to have ${a.weightKg} kg on the ${barA.name} and ` +
+      `${b.weightKg} kg on the ${barB.name} at the same time.`,
+  };
 }
 
 /** Every pair of the given exercises, annotated with whether it can be supersetted. */
 export function supersetMatrix(
-  exercises: Exercise[],
+  exercises: SupersetInput[],
   equipmentById: Map<number, Equipment>,
+  stock: PlateStock[],
 ): SupersetPair[] {
   const pairs: SupersetPair[] = [];
   for (let i = 0; i < exercises.length; i++) {
     for (let j = i + 1; j < exercises.length; j++) {
-      const a = exercises[i]!;
-      const b = exercises[j]!;
-      const conflicts = supersetConflicts(a, b, equipmentById);
-      pairs.push({ exerciseIds: [a.id, b.id], compatible: conflicts.length === 0, conflicts });
+      pairs.push(supersetPair(exercises[i]!, exercises[j]!, equipmentById, stock));
     }
   }
   return pairs;

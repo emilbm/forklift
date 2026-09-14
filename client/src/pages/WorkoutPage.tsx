@@ -1,21 +1,25 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { RegimenItem, SetLog } from '../../../shared/types';
+import type { Equipment, RegimenItem, SetLog } from '../../../shared/types';
 import { api } from '../api';
 import { RestTimer, type RestState } from '../components/RestTimer';
 import { ErrorBanner, IconCheck, IconClose, Sheet, Spinner } from '../components/ui';
 import { formatDuration, formatReps, formatWeight } from '../format';
 import {
   invalidateSessions,
+  useEquipment,
+  useEquipmentLoads,
   useExercises,
   useLastPerformance,
+  useLoadPlan,
   useRegimen,
   useSession,
 } from '../queries';
 import { useWakeLock } from '../useWakeLock';
 
-const WEIGHT_STEP = 2.5;
+/** Used when nothing better is known — no bar, or no plates recorded yet. */
+const FALLBACK_STEP = 2.5;
 
 export default function WorkoutPage() {
   const params = useParams<{ sessionId: string }>();
@@ -26,6 +30,7 @@ export default function WorkoutPage() {
   const session = useSession(Number.isFinite(sessionId) ? sessionId : null);
   const regimen = useRegimen(session.data?.regimenId ?? null);
   const exercises = useExercises();
+  const equipment = useEquipment();
 
   const [index, setIndex] = useState(0);
   const [followProgress, setFollowProgress] = useState(true);
@@ -85,6 +90,22 @@ export default function WorkoutPage() {
   }, [item, done, lastTime.data]);
 
   const weight = item && item.id in weights ? weights[item.id]! : suggestedWeight;
+
+  // The bar this exercise loads, if any — what makes a plate breakdown possible.
+  const bar = useMemo((): Equipment | null => {
+    if (!item) return null;
+    const exercise = (exercises.data ?? []).find((e) => e.id === item.exerciseId);
+    if (!exercise) return null;
+    const byId = new Map((equipment.data ?? []).map((e) => [e.id, e]));
+    for (const id of exercise.equipmentIds) {
+      const candidate = byId.get(id);
+      if (candidate?.usesPlates) return candidate;
+    }
+    return null;
+  }, [item, exercises.data, equipment.data]);
+
+  const loadable = useEquipmentLoads(bar?.id ?? null);
+  const achievable = loadable.data?.weights ?? [];
 
   if (session.isLoading || (session.data?.regimenId !== null && regimen.isLoading)) {
     return (
@@ -168,6 +189,23 @@ export default function WorkoutPage() {
 
   const setWeight = (next: number | null) =>
     item && setWeights((prev) => ({ ...prev, [item.id]: next }));
+
+  /**
+   * Step to the next weight the plates can actually make, rather than a fixed
+   * 2.5 kg that might land on something unloadable.
+   */
+  const stepWeight = (direction: 1 | -1) => {
+    const current = weight ?? bar?.barWeightKg ?? 0;
+    if (achievable.length === 0) {
+      setWeight(Math.max(0, current + direction * FALLBACK_STEP));
+      return;
+    }
+    const next =
+      direction === 1
+        ? achievable.find((w) => w > current + 1e-9)
+        : [...achievable].reverse().find((w) => w < current - 1e-9);
+    if (next !== undefined) setWeight(next);
+  };
 
   const nextLabel = item
     ? done.length + 1 >= item.sets
@@ -283,8 +321,8 @@ export default function WorkoutPage() {
                 <div className="weight">
                   <button
                     className="btn btn--icon"
-                    onClick={() => setWeight(Math.max(0, (weight ?? 0) - WEIGHT_STEP))}
-                    aria-label={`Less ${WEIGHT_STEP} kg`}
+                    onClick={() => stepWeight(-1)}
+                    aria-label="Lighter"
                   >
                     −
                   </button>
@@ -294,7 +332,7 @@ export default function WorkoutPage() {
                       className="weight__value num"
                       type="number"
                       inputMode="decimal"
-                      step={WEIGHT_STEP}
+                      step={FALLBACK_STEP}
                       min={0}
                       placeholder="—"
                       value={weight ?? ''}
@@ -308,13 +346,14 @@ export default function WorkoutPage() {
                   </div>
                   <button
                     className="btn btn--icon"
-                    onClick={() => setWeight((weight ?? 0) + WEIGHT_STEP)}
-                    aria-label={`More ${WEIGHT_STEP} kg`}
+                    onClick={() => stepWeight(1)}
+                    aria-label="Heavier"
                   >
                     +
                   </button>
                 </div>
               </div>
+              {bar && <PlateBreakdown bar={bar} targetKg={weight} />}
             </div>
 
             <div className="card">
@@ -348,6 +387,46 @@ export default function WorkoutPage() {
         />
       )}
     </>
+  );
+}
+
+/** What to hang on the bar — the thing you actually need while standing over it. */
+function PlateBreakdown({ bar, targetKg }: { bar: Equipment; targetKg: number | null }) {
+  const plan = useLoadPlan(bar.id, targetKg);
+
+  if (targetKg === null) {
+    return (
+      <p className="tiny faint" style={{ margin: '10px 0 0' }}>
+        {bar.name} weighs {formatWeight(bar.barWeightKg)} kg on its own.
+      </p>
+    );
+  }
+
+  const perSide = plan.data?.plans[0]?.perSide;
+
+  if (plan.isLoading) {
+    return (
+      <p className="tiny faint" style={{ margin: '10px 0 0' }}>
+        Working out the plates…
+      </p>
+    );
+  }
+
+  if (!perSide) {
+    return (
+      <p className="tiny" style={{ margin: '10px 0 0', color: 'var(--warn)' }}>
+        Your plates can't make {formatWeight(targetKg)} kg on the {bar.name}.
+      </p>
+    );
+  }
+
+  return (
+    <p className="tiny faint num" style={{ margin: '10px 0 0' }}>
+      {formatWeight(bar.barWeightKg)} kg bar
+      {perSide.length === 0
+        ? ' — no plates'
+        : ` + ${perSide.map((s) => `${s.count} × ${formatWeight(s.weightKg)}`).join(' + ')} per side`}
+    </p>
   );
 }
 

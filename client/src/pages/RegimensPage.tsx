@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { EmptyState, ErrorBanner, IconChevron, IconPlus, Spinner } from '../components/ui';
+import {
+  EmptyState,
+  ErrorBanner,
+  IconChevron,
+  IconPlus,
+  Spinner,
+  useConfirm,
+} from '../components/ui';
 import { formatPrescription } from '../format';
 import { useActiveSession, useExercises, useRegimens } from '../queries';
 
@@ -10,6 +17,7 @@ export default function RegimensPage() {
   const exercises = useExercises();
   const activeSession = useActiveSession();
   const navigate = useNavigate();
+  const { confirm, dialog } = useConfirm();
   const [starting, setStarting] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
 
@@ -22,15 +30,15 @@ export default function RegimensPage() {
     setError(null);
     setStarting(regimenId);
     try {
+      // Never quietly end a workout that is still going — offer to open it instead.
       if (activeSession.data) {
-        const keep = confirm(
-          `“${activeSession.data.regimenName}” is still running. Open it instead of starting a new one?`,
-        );
-        if (keep) {
-          navigate(`/workout/${activeSession.data.id}`);
-          return;
-        }
-        await api.sessions.finish(activeSession.data.id);
+        const open = await confirm({
+          title: 'A workout is already running',
+          body: `“${activeSession.data.regimenName}” hasn't been finished. Open it and finish it before starting another.`,
+          confirmLabel: 'Open it',
+        });
+        if (open) navigate(`/workout/${activeSession.data.id}`);
+        return;
       }
       const session = await api.sessions.start(regimenId);
       navigate(`/workout/${session.id}`);
@@ -117,6 +125,8 @@ export default function RegimensPage() {
           ))
         )}
       </main>
+
+      {dialog}
     </>
   );
 }

@@ -2,7 +2,15 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Exercise } from '../../../shared/types';
 import type { ExerciseInput } from '../api';
-import { EmptyState, ErrorBanner, IconPlus, IconTrash, Sheet, Spinner } from '../components/ui';
+import {
+  EmptyState,
+  ErrorBanner,
+  IconPlus,
+  IconTrash,
+  Sheet,
+  Spinner,
+  useConfirm,
+} from '../components/ui';
 import { useEquipment, useExerciseMutations, useExercises } from '../queries';
 
 export default function ExercisesPage() {
@@ -125,6 +133,7 @@ export default function ExercisesPage() {
 function ExerciseSheet({ initial, onClose }: { initial: Exercise | null; onClose: () => void }) {
   const equipment = useEquipment();
   const { create, update, remove } = useExerciseMutations();
+  const { confirm, dialog } = useConfirm();
 
   const [form, setForm] = useState<ExerciseInput>(
     initial
@@ -157,7 +166,13 @@ function ExerciseSheet({ initial, onClose }: { initial: Exercise | null; onClose
 
   async function destroy() {
     if (!initial) return;
-    if (!confirm(`Delete ${initial.name}? Its logged sets go too.`)) return;
+    const ok = await confirm({
+      title: `Delete ${initial.name}?`,
+      body: 'Its logged sets go too.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     setError(null);
     try {
       await remove.mutateAsync(initial.id);
@@ -168,6 +183,7 @@ function ExerciseSheet({ initial, onClose }: { initial: Exercise | null; onClose
   }
 
   return (
+    <>
     <Sheet title={initial ? 'Edit exercise' : 'Add exercise'} onClose={onClose}>
       <div className="stack">
         <ErrorBanner error={error} />
@@ -223,5 +239,7 @@ function ExerciseSheet({ initial, onClose }: { initial: Exercise | null; onClose
         )}
       </div>
     </Sheet>
+    {dialog}
+    </>
   );
 }

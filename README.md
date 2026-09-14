@@ -8,28 +8,38 @@ keeps counting while the screen is off.
 
 ## What it does
 
-- **Equipment** — record what the gym has. Equipment that draws from the same
-  set of plates shares a *plate pool*, which is what makes supersets decidable.
+- **Plates** — the plates you actually own, counted individually. One collection,
+  shared by every bar.
+- **Equipment** — record what the gym has, including what each bar weighs empty.
 - **Exercises** — each one lists the equipment it needs.
 - **Regimens** — the workouts you cycle through (A, B, C…), each an ordered list
   of exercises with sets, a rep target and a rest length.
 - **Workout mode** — walks through a regimen, one exercise at a time. Tap the
-  reps you managed, adjust the weight, and the rest timer starts itself.
+  reps you managed, adjust the weight, and the rest timer starts itself. The
+  weight steps between loads your plates can actually make, and shows what to
+  hang on the bar.
 - **History** — every session, set by set, with volume and duration.
 
-### Plate pools, and why supersets need them
+### Plates, and why supersets need them
 
 Two exercises can only be supersetted if you can go straight from one to the
 other without re-rigging anything. Forklift blocks a pair when:
 
 1. both exercises need the same physical item (one bench, two lifts), or
-2. their equipment draws plates from the same pool — a barbell and an ez-bar
-   sharing one set of plates can't both stay loaded, so you'd be stripping
-   plates between every set.
+2. the plates can't make both loads at the same time.
 
-Tag both bars with the same plate pool and Forklift works this out for you.
+The second is a question of arithmetic, not of which bar is which. A 60 kg
+deadlift (20 kg bar + a pair of 20s) and an 18.5 kg ez-bar curl (8.5 kg bar +
+a pair of 5s) coexist happily on one plate collection. Two heavy bars do not.
+So Forklift works from what you own and what each bar weighs, using the weights
+from the last time you did each lift — and where there is no history it says the
+plates were not checked rather than guessing.
+
 Open a saved regimen and expand **Superset options** to see which pairs are
-possible and why the rest are not.
+possible, at which weights, and why the rest are not.
+
+Plates are loaded in pairs, so two 20 kg plates make one usable pair. Equipment
+that loads asymmetrically (a landmine, say) isn't modelled.
 
 ## Running it
 
@@ -92,7 +102,8 @@ the same network.
 shared/types.ts     types used by both sides
 server/src/db.ts    schema and migrations (node:sqlite, no native module)
 server/src/store.ts all queries
-server/src/superset.ts  the plate-pool conflict rules
+server/src/plates.ts    plate arithmetic: what can be loaded, and what can be loaded at once
+server/src/superset.ts  the superset rules, built on that
 server/src/routes.ts    the HTTP API
 client/src/pages/       one file per screen; WorkoutPage.tsx is the important one
 ```
@@ -104,10 +115,12 @@ running instance upgrades its own volume on restart.
 
 | Method | Path | |
 | --- | --- | --- |
-| `GET/POST` | `/api/plate-pools` | shared sets of plates |
-| `PUT/DELETE` | `/api/plate-pools/:id` | |
+| `GET/POST` | `/api/plates` | the plate collection |
+| `PUT/DELETE` | `/api/plates/:id` | |
+| `POST` | `/api/loads/plan` | how to load one bar, or whether several can be loaded at once |
 | `GET/POST` | `/api/equipment` | |
 | `PUT/DELETE` | `/api/equipment/:id` | |
+| `GET` | `/api/equipment/:id/loads` | every weight this bar can be loaded to |
 | `GET/POST` | `/api/exercises` | |
 | `PUT/DELETE` | `/api/exercises/:id` | |
 | `GET` | `/api/exercises/:id/last-performance` | prefills the weight in workout mode |
@@ -127,11 +140,12 @@ running instance upgrades its own volume on restart.
 npm test
 ```
 
-Boots the API against a throwaway database and exercises the whole flow,
-including the plate-pool superset rules.
+Runs the plate arithmetic against known loadings, then boots the API on a
+throwaway database and exercises the whole flow, including the superset rules.
 
 ## Not built yet
 
 AI-assisted weight and superset suggestions. The groundwork is in place: full
-set history per exercise, and `superset-pairs` already narrows any suggestion to
-pairs that are physically possible in this gym.
+set history per exercise, the plates and bars on hand, `/api/loads/plan` to test
+whether a set of loads can coexist, and `superset-pairs` to narrow any suggestion
+to what this gym can physically assemble.

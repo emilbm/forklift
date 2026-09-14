@@ -4,7 +4,7 @@ import type {
   EquipmentKind,
   Exercise,
   LastPerformance,
-  PlatePool,
+  Plate,
   Regimen,
   RegimenItem,
   Session,
@@ -18,7 +18,8 @@ interface EquipmentRow {
   id: number;
   name: string;
   kind: string;
-  plate_pool_id: number | null;
+  uses_plates: number;
+  bar_weight_kg: number;
   notes: string;
 }
 
@@ -63,7 +64,8 @@ const toEquipment = (r: EquipmentRow): Equipment => ({
   id: r.id,
   name: r.name,
   kind: r.kind as EquipmentKind,
-  platePoolId: r.plate_pool_id,
+  usesPlates: r.uses_plates === 1,
+  barWeightKg: r.bar_weight_kg,
   notes: r.notes,
 });
 
@@ -89,22 +91,33 @@ const toSetLog = (r: SetLogRow): SetLog => ({
   completedAt: r.completed_at,
 });
 
-/* ------------------------------------------------------- plate pools */
+/* ------------------------------------------------------------ plates */
 
-export const platePools = {
-  list(): PlatePool[] {
-    return all<PlatePool>('SELECT id, name FROM plate_pools ORDER BY name');
+export const plates = {
+  list(): Plate[] {
+    return all<Plate>(
+      'SELECT id, weight_kg AS weightKg, count FROM plates ORDER BY weight_kg DESC',
+    );
   },
-  create(name: string): PlatePool {
-    const { lastInsertRowid } = run('INSERT INTO plate_pools (name) VALUES (?)', name);
-    return { id: lastInsertRowid, name };
+  get(id: number): Plate | null {
+    return (
+      get<Plate>('SELECT id, weight_kg AS weightKg, count FROM plates WHERE id = ?', id) ?? null
+    );
   },
-  update(id: number, name: string): PlatePool | null {
-    run('UPDATE plate_pools SET name = ? WHERE id = ?', name, id);
-    return get<PlatePool>('SELECT id, name FROM plate_pools WHERE id = ?', id) ?? null;
+  create(weightKg: number, count: number): Plate {
+    const { lastInsertRowid } = run(
+      'INSERT INTO plates (weight_kg, count) VALUES (?, ?)',
+      weightKg,
+      count,
+    );
+    return plates.get(lastInsertRowid)!;
+  },
+  update(id: number, weightKg: number, count: number): Plate | null {
+    run('UPDATE plates SET weight_kg = ?, count = ? WHERE id = ?', weightKg, count, id);
+    return plates.get(id);
   },
   remove(id: number): boolean {
-    return run('DELETE FROM plate_pools WHERE id = ?', id).changes > 0;
+    return run('DELETE FROM plates WHERE id = ?', id).changes > 0;
   },
 };
 
@@ -113,7 +126,8 @@ export const platePools = {
 export interface EquipmentInput {
   name: string;
   kind: EquipmentKind;
-  platePoolId: number | null;
+  usesPlates: boolean;
+  barWeightKg: number;
   notes: string;
 }
 
@@ -127,20 +141,22 @@ export const equipment = {
   },
   create(input: EquipmentInput): Equipment {
     const { lastInsertRowid } = run(
-      'INSERT INTO equipment (name, kind, plate_pool_id, notes) VALUES (?, ?, ?, ?)',
+      'INSERT INTO equipment (name, kind, uses_plates, bar_weight_kg, notes) VALUES (?, ?, ?, ?, ?)',
       input.name,
       input.kind,
-      input.platePoolId,
+      input.usesPlates ? 1 : 0,
+      input.barWeightKg,
       input.notes,
     );
     return equipment.get(lastInsertRowid)!;
   },
   update(id: number, input: EquipmentInput): Equipment | null {
     run(
-      'UPDATE equipment SET name = ?, kind = ?, plate_pool_id = ?, notes = ? WHERE id = ?',
+      'UPDATE equipment SET name = ?, kind = ?, uses_plates = ?, bar_weight_kg = ?, notes = ? WHERE id = ?',
       input.name,
       input.kind,
-      input.platePoolId,
+      input.usesPlates ? 1 : 0,
+      input.barWeightKg,
       input.notes,
       id,
     );

@@ -1,9 +1,18 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { api, type EquipmentInput, type ExerciseInput, type RegimenInput } from './api';
+import {
+  api,
+  type EquipmentInput,
+  type ExerciseInput,
+  type PlateInput,
+  type RegimenInput,
+} from './api';
 
 export const keys = {
-  platePools: ['plate-pools'] as const,
+  plates: ['plates'] as const,
   equipment: ['equipment'] as const,
+  equipmentLoads: (id: number) => ['equipment', id, 'loads'] as const,
+  loadPlan: (loads: Array<{ equipmentId: number; targetKg: number }>) =>
+    ['loads', 'plan', loads] as const,
   exercises: ['exercises'] as const,
   regimens: ['regimens'] as const,
   regimen: (id: number) => ['regimens', id] as const,
@@ -17,29 +26,50 @@ export const keys = {
     ['exercises', exerciseId, 'last-performance', excludeSessionId ?? null] as const,
 };
 
-/* ------------------------------------------------------------ plate pools */
+/* ----------------------------------------------------------------- plates */
 
-export const usePlatePools = () => useQuery({ queryKey: keys.platePools, queryFn: api.platePools.list });
+export const usePlates = () => useQuery({ queryKey: keys.plates, queryFn: api.plates.list });
 
-export function usePlatePoolMutations() {
+export function usePlateMutations() {
   const qc = useQueryClient();
+  // What is loadable, and which supersets are possible, both follow from the plates.
   const done = () => {
-    void qc.invalidateQueries({ queryKey: keys.platePools });
+    void qc.invalidateQueries({ queryKey: keys.plates });
     void qc.invalidateQueries({ queryKey: keys.equipment });
+    void qc.invalidateQueries({ queryKey: keys.regimens });
+    void qc.invalidateQueries({ queryKey: ['loads'] });
   };
   return {
-    create: useMutation({ mutationFn: api.platePools.create, onSuccess: done }),
-    rename: useMutation({
-      mutationFn: ({ id, name }: { id: number; name: string }) => api.platePools.update(id, name),
+    create: useMutation({ mutationFn: api.plates.create, onSuccess: done }),
+    update: useMutation({
+      mutationFn: ({ id, input }: { id: number; input: PlateInput }) => api.plates.update(id, input),
       onSuccess: done,
     }),
-    remove: useMutation({ mutationFn: api.platePools.remove, onSuccess: done }),
+    remove: useMutation({ mutationFn: api.plates.remove, onSuccess: done }),
   };
 }
 
 /* -------------------------------------------------------------- equipment */
 
 export const useEquipment = () => useQuery({ queryKey: keys.equipment, queryFn: api.equipment.list });
+
+/** Every weight a bar can be loaded to; drives the weight stepper in a workout. */
+export const useEquipmentLoads = (id: number | null) =>
+  useQuery({
+    queryKey: keys.equipmentLoads(id ?? 0),
+    queryFn: () => api.equipment.loads(id!),
+    enabled: id !== null,
+    staleTime: 5 * 60 * 1000,
+  });
+
+/** How to load one bar to a given weight, or null when the plates can't make it. */
+export const useLoadPlan = (equipmentId: number | null, targetKg: number | null) =>
+  useQuery({
+    queryKey: keys.loadPlan([{ equipmentId: equipmentId ?? 0, targetKg: targetKg ?? 0 }]),
+    queryFn: () => api.loads.plan([{ equipmentId: equipmentId!, targetKg: targetKg! }]),
+    enabled: equipmentId !== null && targetKg !== null,
+    staleTime: 5 * 60 * 1000,
+  });
 
 export function useEquipmentMutations() {
   const qc = useQueryClient();
@@ -48,6 +78,7 @@ export function useEquipmentMutations() {
     void qc.invalidateQueries({ queryKey: keys.equipment });
     void qc.invalidateQueries({ queryKey: keys.exercises });
     void qc.invalidateQueries({ queryKey: keys.regimens });
+    void qc.invalidateQueries({ queryKey: ['loads'] });
   };
   return {
     create: useMutation({ mutationFn: api.equipment.create, onSuccess: done }),

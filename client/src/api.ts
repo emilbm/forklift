@@ -1,13 +1,15 @@
 import type {
+  AchievableLoads,
   Equipment,
   Exercise,
   LastPerformance,
-  PlatePool,
+  LoadPlanResult,
+  Plate,
   Regimen,
   Session,
   SessionSummary,
   SetLog,
-  SupersetConflict,
+  SupersetPair,
 } from '../../shared/types';
 
 /**
@@ -57,7 +59,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export interface EquipmentInput {
   name: string;
   kind: Equipment['kind'];
-  platePoolId: number | null;
+  usesPlates: boolean;
+  barWeightKg: number;
   notes: string;
 }
 
@@ -80,18 +83,17 @@ export interface RegimenInput {
   }>;
 }
 
-export interface SupersetPair {
-  exerciseIds: [number, number];
-  compatible: boolean;
-  conflicts: SupersetConflict[];
+export interface PlateInput {
+  weightKg: number;
+  count: number;
 }
 
 export const api = {
-  platePools: {
-    list: () => request<PlatePool[]>('GET', '/plate-pools'),
-    create: (name: string) => request<PlatePool>('POST', '/plate-pools', { name }),
-    update: (id: number, name: string) => request<PlatePool>('PUT', `/plate-pools/${id}`, { name }),
-    remove: (id: number) => request<void>('DELETE', `/plate-pools/${id}`),
+  plates: {
+    list: () => request<Plate[]>('GET', '/plates'),
+    create: (input: PlateInput) => request<Plate>('POST', '/plates', input),
+    update: (id: number, input: PlateInput) => request<Plate>('PUT', `/plates/${id}`, input),
+    remove: (id: number) => request<void>('DELETE', `/plates/${id}`),
   },
 
   equipment: {
@@ -100,6 +102,12 @@ export const api = {
     update: (id: number, input: EquipmentInput) =>
       request<Equipment>('PUT', `/equipment/${id}`, input),
     remove: (id: number) => request<void>('DELETE', `/equipment/${id}`),
+    loads: (id: number) => request<AchievableLoads>('GET', `/equipment/${id}/loads`),
+  },
+
+  loads: {
+    plan: (loads: Array<{ equipmentId: number; targetKg: number }>) =>
+      request<LoadPlanResult>('POST', '/loads/plan', { loads }),
   },
 
   exercises: {

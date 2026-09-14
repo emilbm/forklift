@@ -142,19 +142,71 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_set_logs_session ON set_logs(session_id);
   CREATE INDEX idx_set_logs_exercise ON set_logs(exercise_id, completed_at DESC);
   `,
+
+  // 2 — one shared plate collection instead of per-bar pools.
+  //
+  // Pools couldn't answer the question that actually matters: whether two loads
+  // can be on the bars at once. A 60 kg deadlift and an 18.5 kg ez-bar curl
+  // share a plate collection quite happily; two heavy bars do not. Deciding that
+  // needs the plates owned and each bar's own weight, so both are recorded here.
+  `
+  CREATE TABLE plates (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    weight_kg REAL NOT NULL UNIQUE,
+    count     INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE equipment_v2 (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL UNIQUE,
+    kind          TEXT NOT NULL DEFAULT 'other',
+    uses_plates   INTEGER NOT NULL DEFAULT 0,
+    bar_weight_kg REAL NOT NULL DEFAULT 0,
+    notes         TEXT NOT NULL DEFAULT ''
+  );
+
+  INSERT INTO equipment_v2 (id, name, kind, uses_plates, bar_weight_kg, notes)
+    SELECT id,
+           name,
+           kind,
+           CASE WHEN plate_pool_id IS NOT NULL OR kind = 'barbell' THEN 1 ELSE 0 END,
+           0,
+           notes
+      FROM equipment;
+
+  DROP TABLE equipment;
+  ALTER TABLE equipment_v2 RENAME TO equipment;
+  DROP TABLE plate_pools;
+  `,
 ];
 
 export function migrate(): void {
   const current = get<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0;
+  if (current >= MIGRATIONS.length) return;
 
-  for (let version = current; version < MIGRATIONS.length; version++) {
-    const sql = MIGRATIONS[version];
-    if (!sql) continue;
-    tx(() => {
-      db.exec(sql);
-      // PRAGMA values can't be bound as parameters; version is a loop counter, not input.
-      db.exec(`PRAGMA user_version = ${version + 1}`);
-    });
+  // Rebuilding a table means dropping one that others reference, so constraints
+  // are lifted for the duration and verified once the migrations are in.
+  // A PRAGMA is a no-op inside a transaction, hence outside the loop.
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    for (let version = current; version < MIGRATIONS.length; version++) {
+      const sql = MIGRATIONS[version];
+      if (!sql) continue;
+      tx(() => {
+        db.exec(sql);
+        // PRAGMA values can't be bound as parameters; version is a loop counter, not input.
+        db.exec(`PRAGMA user_version = ${version + 1}`);
+      });
+    }
+
+    const violations = all<{ table: string }>('PRAGMA foreign_key_check');
+    if (violations.length > 0) {
+      throw new Error(
+        `Migration left dangling references in: ${[...new Set(violations.map((v) => v.table))].join(', ')}`,
+      );
+    }
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
   }
 }
 

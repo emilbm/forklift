@@ -8,29 +8,27 @@ import {
   IconTrash,
   Sheet,
   Spinner,
+  useConfirm,
 } from '../components/ui';
-import { EQUIPMENT_KINDS, kindLabel } from '../format';
-import {
-  useEquipment,
-  useEquipmentMutations,
-  usePlatePools,
-  usePlatePoolMutations,
-} from '../queries';
+import { EQUIPMENT_KINDS, formatWeight, kindLabel } from '../format';
+import { useEquipment, useEquipmentMutations, usePlateMutations, usePlates } from '../queries';
 
-const NEW_POOL = '__new__';
+/** Denominations most home gyms are built from, offered as one-tap adds. */
+const COMMON_PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
 
-const blank = (): EquipmentInput => ({ name: '', kind: 'barbell', platePoolId: null, notes: '' });
+const blank = (): EquipmentInput => ({
+  name: '',
+  kind: 'barbell',
+  usesPlates: true,
+  barWeightKg: 20,
+  notes: '',
+});
 
 export default function EquipmentPage() {
   const equipment = useEquipment();
-  const pools = usePlatePools();
+  const plates = usePlates();
   const [editing, setEditing] = useState<Equipment | 'new' | null>(null);
-  const [managingPools, setManagingPools] = useState(false);
-
-  const poolName = useMemo(
-    () => new Map((pools.data ?? []).map((p) => [p.id, p.name])),
-    [pools.data],
-  );
+  const [managingPlates, setManagingPlates] = useState(false);
 
   const grouped = useMemo(() => {
     const byKind = new Map<Equipment['kind'], Equipment[]>();
@@ -42,13 +40,13 @@ export default function EquipmentPage() {
     return [...byKind.entries()];
   }, [equipment.data]);
 
+  const plateCount = (plates.data ?? []).reduce((total, plate) => total + plate.count, 0);
+  const usesPlates = (equipment.data ?? []).some((item) => item.usesPlates);
+
   return (
     <>
       <header className="header">
         <h1>Equipment</h1>
-        <button className="btn btn--sm btn--ghost" onClick={() => setManagingPools(true)}>
-          Plate pools
-        </button>
         <button
           className="btn btn--icon btn--primary"
           onClick={() => setEditing('new')}
@@ -59,14 +57,41 @@ export default function EquipmentPage() {
       </header>
 
       <main className="main">
-        <ErrorBanner error={equipment.error} />
+        <ErrorBanner error={equipment.error ?? plates.error} />
+
+        <h2 className="section-title">Plates</h2>
+        <button
+          className="card row row--between"
+          onClick={() => setManagingPlates(true)}
+          style={{ width: '100%', textAlign: 'left', cursor: 'pointer' }}
+        >
+          <span className="grow">
+            <span style={{ fontWeight: 650 }}>
+              {plateCount === 0 ? 'No plates yet' : `${plateCount} plates`}
+            </span>
+            <span className="small muted" style={{ display: 'block' }}>
+              {plateCount === 0
+                ? 'Add what you own so Forklift knows what you can load'
+                : (plates.data ?? [])
+                    .map((plate) => `${plate.count}× ${formatWeight(plate.weightKg)}`)
+                    .join(', ') + ' kg'}
+            </span>
+          </span>
+          <span className="chip chip--accent">Edit</span>
+        </button>
+        {usesPlates && (
+          <p className="tiny faint" style={{ marginTop: 8 }}>
+            One collection, shared by every bar. Two lifts can only be supersetted if their plates
+            can be on both bars at once.
+          </p>
+        )}
 
         {equipment.isLoading ? (
           <Spinner />
         ) : (equipment.data ?? []).length === 0 ? (
           <EmptyState
             title="No equipment yet"
-            hint="Add what you have in the gym. Bars that share a set of plates go in the same plate pool, so Forklift knows they can't be used back to back."
+            hint="Add the bars, benches and machines you have. For anything loaded with plates, record what the bar itself weighs."
             action={
               <button className="btn btn--primary" onClick={() => setEditing('new')}>
                 Add equipment
@@ -89,9 +114,9 @@ export default function EquipmentPage() {
                           </span>
                         )}
                       </span>
-                      {item.platePoolId !== null && (
-                        <span className="chip chip--pool">
-                          {poolName.get(item.platePoolId) ?? 'Pool'}
+                      {item.usesPlates && (
+                        <span className="chip chip--accent num">
+                          {formatWeight(item.barWeightKg)} kg bar
                         </span>
                       )}
                     </button>
@@ -101,13 +126,6 @@ export default function EquipmentPage() {
             </section>
           ))
         )}
-
-        {(equipment.data ?? []).some((e) => e.platePoolId !== null) && (
-          <p className="tiny faint" style={{ marginTop: 18 }}>
-            Equipment tagged with a plate pool shares one set of plates. Two exercises using the
-            same pool can't be supersetted — the plates would have to be swapped between sets.
-          </p>
-        )}
       </main>
 
       {editing && (
@@ -116,7 +134,7 @@ export default function EquipmentPage() {
           onClose={() => setEditing(null)}
         />
       )}
-      {managingPools && <PlatePoolSheet onClose={() => setManagingPools(false)} />}
+      {managingPlates && <PlatesSheet onClose={() => setManagingPlates(false)} />}
     </>
   );
 }
@@ -124,38 +142,29 @@ export default function EquipmentPage() {
 /* ------------------------------------------------------------------ sheets */
 
 function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClose: () => void }) {
-  const pools = usePlatePools();
   const { create, update, remove } = useEquipmentMutations();
-  const poolMutations = usePlatePoolMutations();
+  const { confirm, dialog } = useConfirm();
 
   const [form, setForm] = useState<EquipmentInput>(
     initial
       ? {
           name: initial.name,
           kind: initial.kind,
-          platePoolId: initial.platePoolId,
+          usesPlates: initial.usesPlates,
+          barWeightKg: initial.barWeightKg,
           notes: initial.notes,
         }
       : blank(),
   );
-  const [newPoolName, setNewPoolName] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-
-  const busy = create.isPending || update.isPending || remove.isPending || poolMutations.create.isPending;
+  const busy = create.isPending || update.isPending || remove.isPending;
 
   async function save() {
     setError(null);
     try {
-      let platePoolId = form.platePoolId;
-      // Creating a pool inline saves a trip to the plate-pool sheet.
-      if (newPoolName !== null) {
-        const trimmed = newPoolName.trim();
-        if (!trimmed) throw new Error('Give the plate pool a name');
-        platePoolId = (await poolMutations.create.mutateAsync(trimmed)).id;
-      }
-      const input = { ...form, name: form.name.trim(), platePoolId };
+      const input = { ...form, name: form.name.trim() };
       if (!input.name) throw new Error('Give the equipment a name');
-
+      if (!input.usesPlates) input.barWeightKg = 0;
       if (initial) await update.mutateAsync({ id: initial.id, input });
       else await create.mutateAsync(input);
       onClose();
@@ -166,7 +175,13 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
 
   async function destroy() {
     if (!initial) return;
-    if (!confirm(`Delete ${initial.name}? Exercises using it will lose the requirement.`)) return;
+    const ok = await confirm({
+      title: `Delete ${initial.name}?`,
+      body: 'Exercises using it will lose the requirement.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     setError(null);
     try {
       await remove.mutateAsync(initial.id);
@@ -177,186 +192,225 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
   }
 
   return (
-    <Sheet title={initial ? 'Edit equipment' : 'Add equipment'} onClose={onClose}>
-      <div className="stack">
-        <ErrorBanner error={error} />
+    <>
+      <Sheet title={initial ? 'Edit equipment' : 'Add equipment'} onClose={onClose}>
+        <div className="stack">
+          <ErrorBanner error={error} />
 
-        <div className="field">
-          <label htmlFor="eq-name">Name</label>
-          <input
-            id="eq-name"
-            className="input"
-            value={form.name}
-            autoFocus={!initial}
-            placeholder="Barbell"
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="eq-kind">Kind</label>
-          <select
-            id="eq-kind"
-            className="select"
-            value={form.kind}
-            onChange={(e) => setForm({ ...form, kind: e.target.value as Equipment['kind'] })}
-          >
-            {EQUIPMENT_KINDS.map((k) => (
-              <option key={k.value} value={k.value}>
-                {k.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="field">
-          <label htmlFor="eq-pool">Plate pool</label>
-          <select
-            id="eq-pool"
-            className="select"
-            value={newPoolName !== null ? NEW_POOL : (form.platePoolId ?? '')}
-            onChange={(e) => {
-              const value = e.target.value;
-              if (value === NEW_POOL) {
-                setNewPoolName('');
-              } else {
-                setNewPoolName(null);
-                setForm({ ...form, platePoolId: value === '' ? null : Number(value) });
-              }
-            }}
-          >
-            <option value="">None — loads independently</option>
-            {(pools.data ?? []).map((pool) => (
-              <option key={pool.id} value={pool.id}>
-                {pool.name}
-              </option>
-            ))}
-            <option value={NEW_POOL}>+ New plate pool…</option>
-          </select>
-          {newPoolName !== null && (
+          <div className="field">
+            <label htmlFor="eq-name">Name</label>
             <input
+              id="eq-name"
               className="input"
-              autoFocus
-              placeholder="e.g. Main plates"
-              value={newPoolName}
-              onChange={(e) => setNewPoolName(e.target.value)}
+              value={form.name}
+              autoFocus={!initial}
+              placeholder="Barbell"
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
+          </div>
+
+          <div className="field">
+            <label htmlFor="eq-kind">Kind</label>
+            <select
+              id="eq-kind"
+              className="select"
+              value={form.kind}
+              onChange={(e) => setForm({ ...form, kind: e.target.value as Equipment['kind'] })}
+            >
+              {EQUIPMENT_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <label className={`checkline${form.usesPlates ? ' checkline--on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={form.usesPlates}
+              onChange={(e) => setForm({ ...form, usesPlates: e.target.checked })}
+            />
+            <span className="grow">Loaded with plates</span>
+          </label>
+
+          {form.usesPlates && (
+            <div className="field">
+              <label htmlFor="eq-bar">Bar weight (kg)</label>
+              <input
+                id="eq-bar"
+                className="input input--num"
+                type="number"
+                inputMode="decimal"
+                step={0.25}
+                min={0}
+                value={form.barWeightKg}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    barWeightKg: e.target.value === '' ? 0 : Number(e.target.value),
+                  })
+                }
+              />
+              <p className="tiny faint" style={{ margin: 0 }}>
+                What it weighs empty — 20 kg for a typical barbell, 8.5 kg for many ez-bars. Plates
+                go on top of this, in pairs.
+              </p>
+            </div>
           )}
-          <p className="tiny faint" style={{ margin: 0 }}>
-            Pick the same pool for bars that share one set of plates, like a barbell and an ez-bar.
-          </p>
-        </div>
 
-        <div className="field">
-          <label htmlFor="eq-notes">Notes</label>
-          <input
-            id="eq-notes"
-            className="input"
-            value={form.notes}
-            placeholder="20 kg bar, 2× collars"
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          />
-        </div>
+          <div className="field">
+            <label htmlFor="eq-notes">Notes</label>
+            <input
+              id="eq-notes"
+              className="input"
+              value={form.notes}
+              placeholder="Anything worth remembering"
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            />
+          </div>
 
-        <button className="btn btn--primary btn--block btn--lg" onClick={save} disabled={busy}>
-          {initial ? 'Save' : 'Add equipment'}
-        </button>
-        {initial && (
-          <button className="btn btn--danger btn--block" onClick={destroy} disabled={busy}>
-            <IconTrash /> Delete
+          <button className="btn btn--primary btn--block btn--lg" onClick={save} disabled={busy}>
+            {initial ? 'Save' : 'Add equipment'}
           </button>
-        )}
-      </div>
-    </Sheet>
+          {initial && (
+            <button className="btn btn--danger btn--block" onClick={destroy} disabled={busy}>
+              <IconTrash /> Delete
+            </button>
+          )}
+        </div>
+      </Sheet>
+      {dialog}
+    </>
   );
 }
 
-function PlatePoolSheet({ onClose }: { onClose: () => void }) {
-  const pools = usePlatePools();
-  const equipment = useEquipment();
-  const { create, rename, remove } = usePlatePoolMutations();
-  const [name, setName] = useState('');
+function PlatesSheet({ onClose }: { onClose: () => void }) {
+  const plates = usePlates();
+  const { create, update, remove } = usePlateMutations();
+  const { confirm, dialog } = useConfirm();
   const [error, setError] = useState<unknown>(null);
+  const [customWeight, setCustomWeight] = useState('');
 
-  const usage = useMemo(() => {
-    const map = new Map<number, string[]>();
-    for (const item of equipment.data ?? []) {
-      if (item.platePoolId === null) continue;
-      const list = map.get(item.platePoolId) ?? [];
-      list.push(item.name);
-      map.set(item.platePoolId, list);
-    }
-    return map;
-  }, [equipment.data]);
+  const owned = plates.data ?? [];
+  const ownedWeights = new Set(owned.map((plate) => plate.weightKg));
 
-  async function add() {
-    const trimmed = name.trim();
-    if (!trimmed) return;
+  async function add(weightKg: number, count = 2) {
     setError(null);
     try {
-      await create.mutateAsync(trimmed);
-      setName('');
+      await create.mutateAsync({ weightKg, count });
     } catch (err) {
       setError(err);
     }
   }
 
+  async function setCount(id: number, weightKg: number, count: number) {
+    setError(null);
+    try {
+      await update.mutateAsync({ id, input: { weightKg, count: Math.max(0, count) } });
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  async function addCustom() {
+    const weightKg = Number(customWeight);
+    if (!Number.isFinite(weightKg) || weightKg <= 0) return;
+    await add(weightKg);
+    setCustomWeight('');
+  }
+
   return (
-    <Sheet title="Plate pools" onClose={onClose}>
-      <div className="stack">
-        <p className="small muted" style={{ margin: 0 }}>
-          A plate pool is one physical set of plates. Anything loaded from the same pool can't be
-          supersetted, because you'd be moving plates between bars mid-set.
-        </p>
+    <>
+      <Sheet title="Your plates" onClose={onClose}>
+        <div className="stack">
+          <p className="small muted" style={{ margin: 0 }}>
+            Every plate you own, counted individually. Bars load in pairs, so two 20s make one
+            usable pair. Every plate-loaded bar draws from this one collection.
+          </p>
 
-        <ErrorBanner error={error} />
+          <ErrorBanner error={error} />
 
-        {(pools.data ?? []).map((pool) => (
-          <div key={pool.id} className="card">
-            <div className="row">
-              <input
-                className="input grow"
-                defaultValue={pool.name}
-                onBlur={(e) => {
-                  const next = e.target.value.trim();
-                  if (next && next !== pool.name) {
-                    rename.mutate({ id: pool.id, name: next });
-                  } else {
-                    e.target.value = pool.name;
-                  }
-                }}
-              />
+          {owned.length === 0 && (
+            <div className="banner banner--info">
+              Nothing yet. Tap a size below to add a pair.
+            </div>
+          )}
+
+          {owned.map((plate) => (
+            <div key={plate.id} className="row" style={{ gap: 10 }}>
+              <span className="chip chip--accent num" style={{ minWidth: 72, justifyContent: 'center' }}>
+                {formatWeight(plate.weightKg)} kg
+              </span>
+              <button
+                className="btn btn--icon"
+                onClick={() => setCount(plate.id, plate.weightKg, plate.count - 1)}
+                disabled={plate.count === 0}
+                aria-label={`One fewer ${plate.weightKg} kg plate`}
+              >
+                −
+              </button>
+              <span className="grow num" style={{ textAlign: 'center', fontWeight: 700 }}>
+                {plate.count}
+                <span className="tiny faint" style={{ display: 'block', fontWeight: 500 }}>
+                  {Math.floor(plate.count / 2)} pair{Math.floor(plate.count / 2) === 1 ? '' : 's'}
+                </span>
+              </span>
+              <button
+                className="btn btn--icon"
+                onClick={() => setCount(plate.id, plate.weightKg, plate.count + 1)}
+                aria-label={`One more ${plate.weightKg} kg plate`}
+              >
+                +
+              </button>
               <button
                 className="btn btn--icon btn--danger"
-                aria-label={`Delete ${pool.name}`}
-                onClick={() => {
-                  if (confirm(`Delete "${pool.name}"? Its equipment becomes independent.`)) {
-                    remove.mutate(pool.id);
-                  }
+                aria-label={`Remove ${plate.weightKg} kg plates`}
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: `Remove ${formatWeight(plate.weightKg)} kg plates?`,
+                    body: 'They stop counting towards what you can load.',
+                    confirmLabel: 'Remove',
+                    danger: true,
+                  });
+                  if (ok) remove.mutate(plate.id);
                 }}
               >
                 <IconTrash />
               </button>
             </div>
-            <p className="tiny faint" style={{ margin: '8px 0 0' }}>
-              {usage.get(pool.id)?.join(', ') ?? 'Not used by any equipment yet'}
-            </p>
-          </div>
-        ))}
+          ))}
 
-        <div className="row">
-          <input
-            className="input grow"
-            placeholder="New pool name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void add()}
-          />
-          <button className="btn btn--primary" onClick={add} disabled={!name.trim()}>
-            Add
-          </button>
+          <h3 className="section-title" style={{ marginBottom: 0 }}>
+            Add a size
+          </h3>
+          <div className="row row--wrap" style={{ gap: 8 }}>
+            {COMMON_PLATES.filter((weight) => !ownedWeights.has(weight)).map((weight) => (
+              <button key={weight} className="btn btn--sm" onClick={() => add(weight)}>
+                + {formatWeight(weight)} kg
+              </button>
+            ))}
+          </div>
+
+          <div className="row" style={{ gap: 8 }}>
+            <input
+              className="input grow input--num"
+              type="number"
+              inputMode="decimal"
+              step={0.25}
+              min={0.25}
+              placeholder="Other size"
+              value={customWeight}
+              onChange={(e) => setCustomWeight(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void addCustom()}
+            />
+            <button className="btn btn--primary" onClick={addCustom} disabled={!customWeight}>
+              Add
+            </button>
+          </div>
         </div>
-      </div>
-    </Sheet>
+      </Sheet>
+      {dialog}
+    </>
   );
 }

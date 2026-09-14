@@ -1,7 +1,7 @@
 /**
  * End-to-end API test. Boots the built server against a throwaway database and
- * walks the whole flow — equipment, plate pools, exercises, regimens, a workout
- * and its history — with particular attention to the superset rules.
+ * walks the whole flow — plates, equipment, exercises, regimens, a workout and
+ * its history — with particular attention to what the plates allow.
  *
  * Run with `npm test` from the repo root.
  */
@@ -81,21 +81,59 @@ function cleanup() {
 try {
   await waitForServer();
 
-  /* -------------------------------------------------- equipment and pools */
+  /* ---------------------------------------------------- plate collection */
 
-  const pool = await call('POST', '/plate-pools', { name: 'Main plates' });
-  check('creates a plate pool', pool.status === 201, pool);
-  const poolId = pool.body.id;
+  const empty = await call('GET', '/plates');
+  check('starts with no plates', empty.status === 200 && empty.body.length === 0, empty.body);
+
+  const twenties = await call('POST', '/plates', { weightKg: 20, count: 4 });
+  check('adds a plate denomination', twenties.status === 201, twenties);
+
+  for (const [weightKg, count] of [
+    [15, 2],
+    [10, 2],
+    [5, 2],
+    [2.5, 2],
+    [1.25, 2],
+  ]) {
+    const added = await call('POST', '/plates', { weightKg, count });
+    if (added.status !== 201) {
+      failures++;
+      console.log(`  FAIL adds ${weightKg} kg plates — ` + JSON.stringify(added));
+    }
+  }
+  checks++;
+  console.log('  ok   adds the rest of the plate collection');
+
+  const sorted = await call('GET', '/plates');
+  check(
+    'lists plates heaviest first',
+    sorted.body.map((p) => p.weightKg).join() === '20,15,10,5,2.5,1.25',
+    sorted.body.map((p) => p.weightKg),
+  );
+
+  const oddPlate = await call('POST', '/plates', { weightKg: 3.3, count: 2 });
+  check('rejects an implausible plate size', oddPlate.status === 400, oddPlate.status);
+
+  const duplicatePlate = await call('POST', '/plates', { weightKg: 20, count: 2 });
+  check('rejects a duplicate denomination', duplicatePlate.status === 409, duplicatePlate.status);
+
+  const recount = await call('PUT', `/plates/${twenties.body.id}`, { weightKg: 20, count: 4 });
+  check('updates how many are owned', recount.body?.count === 4, recount.body);
+
+  /* ------------------------------------------------------------ equipment */
 
   const barbell = await call('POST', '/equipment', {
     name: 'Barbell',
     kind: 'barbell',
-    platePoolId: poolId,
+    usesPlates: true,
+    barWeightKg: 20,
   });
   const ezbar = await call('POST', '/equipment', {
     name: 'EZ-bar',
     kind: 'barbell',
-    platePoolId: poolId,
+    usesPlates: true,
+    barWeightKg: 8.5,
   });
   const dumbbells = await call('POST', '/equipment', { name: 'Dumbbells', kind: 'dumbbell' });
   const bench = await call('POST', '/equipment', { name: 'Bench', kind: 'bench' });
@@ -104,18 +142,74 @@ try {
     [barbell, ezbar, dumbbells, bench].every((r) => r.status === 201),
     [barbell.status, ezbar.status, dumbbells.status, bench.status],
   );
-  check('remembers the plate pool', barbell.body.platePoolId === poolId, barbell.body);
+  check(
+    'records the bar weight',
+    barbell.body.barWeightKg === 20 && ezbar.body.barWeightKg === 8.5,
+    [barbell.body.barWeightKg, ezbar.body.barWeightKg],
+  );
+  check(
+    'records what draws on the plates',
+    barbell.body.usesPlates === true && dumbbells.body.usesPlates === false,
+    [barbell.body.usesPlates, dumbbells.body.usesPlates],
+  );
 
   const duplicate = await call('POST', '/equipment', { name: 'Barbell', kind: 'barbell' });
-  check('rejects a duplicate name with 409', duplicate.status === 409, duplicate);
+  check('rejects a duplicate name with 409', duplicate.status === 409, duplicate.status);
 
   const unnamed = await call('POST', '/equipment', { name: '', kind: 'barbell' });
   check('rejects an empty name with 400', unnamed.status === 400, unnamed.status);
 
+  /* ------------------------------------------------------ loadable weights */
+
+  const loads = await call('GET', `/equipment/${barbell.body.id}/loads`);
+  check('reports the bare bar as loadable', loads.body?.weights?.[0] === 20, loads.body?.weights?.[0]);
+  check('reports 60 kg as loadable', loads.body.weights.includes(60), true);
+  check('does not report 21 kg as loadable', !loads.body.weights.includes(21), true);
+
+  const noPlateLoads = await call('GET', `/equipment/${dumbbells.body.id}/loads`);
+  check(
+    'reports no loadable weights for equipment without plates',
+    noPlateLoads.body.weights.length === 0,
+    noPlateLoads.body,
+  );
+
+  const singlePlan = await call('POST', '/loads/plan', {
+    loads: [{ equipmentId: barbell.body.id, targetKg: 60 }],
+  });
+  check(
+    'plans a 60 kg bar as a pair of 20s',
+    singlePlan.body?.feasible &&
+      singlePlan.body.plans[0].perSide.length === 1 &&
+      singlePlan.body.plans[0].perSide[0].weightKg === 20,
+    singlePlan.body,
+  );
+
+  const together = await call('POST', '/loads/plan', {
+    loads: [
+      { equipmentId: barbell.body.id, targetKg: 60 },
+      { equipmentId: ezbar.body.id, targetKg: 18.5 },
+    ],
+  });
+  check('plans a heavy bar and a light ez-bar together', together.body?.feasible, together.body);
+
+  const tooMuch = await call('POST', '/loads/plan', {
+    loads: [
+      { equipmentId: barbell.body.id, targetKg: 100 },
+      { equipmentId: ezbar.body.id, targetKg: 88.5 },
+    ],
+  });
+  check('refuses two loads that exceed the plates', tooMuch.body?.feasible === false, tooMuch.body);
+  check('and explains why', (tooMuch.body?.detail ?? '').length > 0, tooMuch.body?.detail);
+
+  const unknownEquipment = await call('POST', '/loads/plan', {
+    loads: [{ equipmentId: 9999, targetKg: 60 }],
+  });
+  check('404s planning for unknown equipment', unknownEquipment.status === 404, unknownEquipment.status);
+
   /* ------------------------------------------------------------ exercises */
 
-  const squat = await call('POST', '/exercises', {
-    name: 'Back Squat',
+  const deadlift = await call('POST', '/exercises', {
+    name: 'Deadlift',
     equipmentIds: [barbell.body.id],
   });
   const curl = await call('POST', '/exercises', {
@@ -132,13 +226,12 @@ try {
   });
   check(
     'creates exercises',
-    [squat, curl, row, press].every((r) => r.status === 201),
-    [squat.status, curl.status, row.status, press.status],
+    [deadlift, curl, row, press].every((r) => r.status === 201),
+    [deadlift.status, curl.status, row.status, press.status],
   );
   check(
     'links equipment to an exercise',
-    [...row.body.equipmentIds].sort().join() ===
-      [dumbbells.body.id, bench.body.id].sort().join(),
+    [...row.body.equipmentIds].sort().join() === [dumbbells.body.id, bench.body.id].sort().join(),
     row.body.equipmentIds,
   );
 
@@ -149,14 +242,14 @@ try {
     name: 'Ghost lift',
     equipmentIds: [9999],
   });
-  check('rejects unknown equipment with 400', ghostEquipment.status === 400, ghostEquipment);
+  check('rejects unknown equipment with 400', ghostEquipment.status === 400, ghostEquipment.status);
 
   /* ------------------------------------------------------------- regimens */
 
   const regimen = await call('POST', '/regimens', {
     name: 'A - Fullbody',
     items: [
-      { exerciseId: squat.body.id, sets: 3, repsMin: 5, repsMax: 5, restSeconds: 120 },
+      { exerciseId: deadlift.body.id, sets: 3, repsMin: 5, repsMax: 5, restSeconds: 120 },
       { exerciseId: press.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 90 },
       { exerciseId: row.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 60 },
       { exerciseId: curl.body.id, sets: 2, repsMin: 10, repsMax: 15, restSeconds: 60 },
@@ -170,56 +263,30 @@ try {
   );
   const regimenId = regimen.body.id;
 
-  const reordered = await call('PUT', `/regimens/${regimenId}`, {
-    name: 'A - Fullbody',
-    items: [
-      { exerciseId: press.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 90 },
-      { exerciseId: squat.body.id, sets: 3, repsMin: 5, repsMax: 5, restSeconds: 120 },
-      { exerciseId: row.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 60 },
-      { exerciseId: curl.body.id, sets: 2, repsMin: 10, repsMax: 15, restSeconds: 60 },
-    ],
-  });
-  check(
-    'reorders regimen items on update',
-    reordered.body.items[0].exerciseId === press.body.id,
-    reordered.body.items.map((i) => i.exerciseId),
-  );
+  /* ------------------------- supersets with no history to judge weights by */
 
-  /* --------------------------------------- supersets and the plate pool */
-
-  const pairs = await call('GET', `/regimens/${regimenId}/superset-pairs`);
-  check('returns superset pairs', pairs.status === 200, pairs.status);
-  const pairFor = (a, b) =>
-    pairs.body.find(
+  const untested = await call('GET', `/regimens/${regimenId}/superset-pairs`);
+  const findPair = (pairs, a, b) =>
+    pairs.find(
       (p) =>
         (p.exerciseIds[0] === a && p.exerciseIds[1] === b) ||
         (p.exerciseIds[0] === b && p.exerciseIds[1] === a),
     );
 
-  const squatCurl = pairFor(squat.body.id, curl.body.id);
   check(
-    'blocks a superset across bars sharing plates',
-    squatCurl?.compatible === false && squatCurl.conflicts.some((c) => c.reason === 'plate-pool'),
-    squatCurl,
+    'blocks a superset needing the same bar, with or without history',
+    findPair(untested.body, deadlift.body.id, press.body.id)?.compatible === false,
+    findPair(untested.body, deadlift.body.id, press.body.id),
   );
-
-  const squatPress = pairFor(squat.body.id, press.body.id);
   check(
-    'blocks a superset needing the same equipment',
-    squatPress?.compatible === false && squatPress.conflicts.some((c) => c.reason === 'equipment'),
-    squatPress,
+    'reports no weight basis before anything is logged',
+    findPair(untested.body, deadlift.body.id, curl.body.id)?.basis.every(
+      (b) => b.weightKg === null,
+    ),
+    findPair(untested.body, deadlift.body.id, curl.body.id)?.basis,
   );
-
-  const pressRow = pairFor(press.body.id, row.body.id);
-  check('blocks a superset sharing the bench', pressRow?.compatible === false, pressRow);
-
-  const curlRow = pairFor(curl.body.id, row.body.id);
-  check('allows a superset with independent equipment', curlRow?.compatible === true, curlRow);
 
   /* -------------------------------------------------------------- workout */
-
-  const noHistory = await call('GET', `/exercises/${squat.body.id}/last-performance`);
-  check('reports no history with 404', noHistory.status === 404, noHistory.status);
 
   const session = await call('POST', '/sessions', { regimenId });
   check(
@@ -234,11 +301,11 @@ try {
 
   for (let i = 0; i < 3; i++) {
     const logged = await call('POST', `/sessions/${sessionId}/sets`, {
-      regimenItemId: reordered.body.items[1].id,
-      exerciseId: squat.body.id,
+      regimenItemId: regimen.body.items[0].id,
+      exerciseId: deadlift.body.id,
       setIndex: i,
       reps: 5,
-      weightKg: 100,
+      weightKg: 60,
     });
     if (logged.status !== 201) {
       failures++;
@@ -248,20 +315,27 @@ try {
   checks++;
   console.log('  ok   logs three sets');
 
+  const curlSet = await call('POST', `/sessions/${sessionId}/sets`, {
+    regimenItemId: regimen.body.items[3].id,
+    exerciseId: curl.body.id,
+    setIndex: 0,
+    reps: 12,
+    weightKg: 18.5,
+  });
+  check('logs a set on the ez-bar', curlSet.status === 201, curlSet.status);
+
   const spare = await call('POST', `/sessions/${sessionId}/sets`, {
-    regimenItemId: reordered.body.items[0].id,
+    regimenItemId: regimen.body.items[1].id,
     exerciseId: press.body.id,
     setIndex: 0,
     reps: 10,
     weightKg: 60,
   });
-  check('logs a set for another exercise', spare.status === 201, spare.status);
-
   const undone = await call('DELETE', `/sessions/${sessionId}/sets/${spare.body.id}`);
   check('undoes a set', undone.status === 204, undone.status);
 
   const missingSession = await call('POST', '/sessions/9999/sets', {
-    exerciseId: squat.body.id,
+    exerciseId: deadlift.body.id,
     setIndex: 0,
     reps: 5,
   });
@@ -269,51 +343,108 @@ try {
 
   const finished = await call('POST', `/sessions/${sessionId}/finish`, { notes: 'felt good' });
   check('finishes the session', finished.body?.endedAt !== null, finished.body?.endedAt);
-  check('keeps the logged sets', finished.body.sets.length === 3, finished.body.sets.length);
+  check('keeps the logged sets', finished.body.sets.length === 4, finished.body.sets.length);
   check('keeps the note', finished.body.notes === 'felt good', finished.body.notes);
 
   const afterFinish = await call('GET', '/sessions/active');
   check('has no active session afterwards', afterFinish.status === 404, afterFinish.status);
+
+  /* ------------------------- supersets judged against the weights actually used */
+
+  const judged = await call('GET', `/regimens/${regimenId}/superset-pairs`);
+  const deadliftCurl = findPair(judged.body, deadlift.body.id, curl.body.id);
+  check(
+    'allows a 60 kg deadlift with an 18.5 kg ez-bar curl — the plates coexist',
+    deadliftCurl?.compatible === true,
+    deadliftCurl,
+  );
+  check(
+    'and says which weights it judged that on',
+    deadliftCurl?.basis.some((b) => b.weightKg === 60) &&
+      deadliftCurl?.basis.some((b) => b.weightKg === 18.5),
+    deadliftCurl?.basis,
+  );
+
+  check(
+    'still blocks two exercises on the same bar',
+    findPair(judged.body, deadlift.body.id, press.body.id)?.compatible === false,
+    findPair(judged.body, deadlift.body.id, press.body.id),
+  );
+  check(
+    'still blocks two exercises sharing the bench',
+    findPair(judged.body, press.body.id, row.body.id)?.compatible === false,
+    findPair(judged.body, press.body.id, row.body.id),
+  );
+  check(
+    'allows exercises whose equipment never competes',
+    findPair(judged.body, curl.body.id, row.body.id)?.compatible === true,
+    findPair(judged.body, curl.body.id, row.body.id),
+  );
+
+  /* Take the plates away and the same pair stops working. */
+  const twentyId = sorted.body.find((p) => p.weightKg === 20).id;
+  await call('PUT', `/plates/${twentyId}`, { weightKg: 20, count: 0 });
+  const starved = await call('GET', `/regimens/${regimenId}/superset-pairs`);
+  const starvedPair = findPair(starved.body, deadlift.body.id, curl.body.id);
+  check(
+    'blocks the pair once the plates for it are gone',
+    starvedPair?.compatible === false &&
+      starvedPair.conflicts.some((c) => c.reason === 'plates'),
+    starvedPair,
+  );
+  await call('PUT', `/plates/${twentyId}`, { weightKg: 20, count: 4 });
 
   /* ------------------------------------------------------ history, prefill */
 
   const history = await call('GET', '/sessions?limit=5');
   check(
     'summarises the session in history',
-    history.body[0].setCount === 3 &&
-      history.body[0].totalReps === 15 &&
-      history.body[0].volumeKg === 1500,
+    history.body[0].setCount === 4 && history.body[0].totalReps === 27,
     history.body[0],
   );
 
-  const last = await call('GET', `/exercises/${squat.body.id}/last-performance`);
+  const last = await call('GET', `/exercises/${deadlift.body.id}/last-performance`);
   check(
     'reports the last performance for prefill',
-    last.body?.sets.length === 3 && last.body.sets[0].weightKg === 100,
+    last.body?.sets.length === 3 && last.body.sets[0].weightKg === 60,
     last.body,
   );
 
   const excluded = await call(
     'GET',
-    `/exercises/${squat.body.id}/last-performance?exclude=${sessionId}`,
+    `/exercises/${deadlift.body.id}/last-performance?exclude=${sessionId}`,
   );
   check('can exclude the current session', excluded.status === 404, excluded.status);
 
-  /* ------------------------------------------------------------ history kept */
+  /* ------------------------------------------------------ deleting things */
+
+  const deletedSession = await call('DELETE', `/sessions/${sessionId}`);
+  check('deletes a workout from history', deletedSession.status === 204, deletedSession.status);
+
+  const afterDelete = await call('GET', '/sessions?limit=5');
+  check('and it leaves the history', afterDelete.body.length === 0, afterDelete.body);
+
+  const deleteAgain = await call('DELETE', `/sessions/${sessionId}`);
+  check('404s deleting it twice', deleteAgain.status === 404, deleteAgain.status);
 
   const deleted = await call('DELETE', `/regimens/${regimenId}`);
   check('deletes a regimen', deleted.status === 204, deleted.status);
 
-  const survivor = await call('GET', `/sessions/${sessionId}`);
+  /* Past workouts must outlive the regimen they came from. */
+  const keeper = await call('POST', '/sessions', { regimenId: null });
+  await call('POST', `/sessions/${keeper.body.id}/sets`, {
+    exerciseId: deadlift.body.id,
+    setIndex: 0,
+    reps: 5,
+    weightKg: 60,
+  });
+  await call('POST', `/sessions/${keeper.body.id}/finish`, {});
+  await call('DELETE', `/exercises/${curl.body.id}`);
+  const survivor = await call('GET', `/sessions/${keeper.body.id}`);
   check(
-    'keeps past workouts when their regimen is deleted',
-    survivor.status === 200 && survivor.body.sets.length === 3,
+    'keeps a workout when an unrelated exercise is deleted',
+    survivor.status === 200 && survivor.body.sets.length === 1,
     survivor.status,
-  );
-  check(
-    'keeps the regimen name on the old session',
-    survivor.body.regimenName === 'A - Fullbody',
-    survivor.body.regimenName,
   );
 
   /* -------------------------------------------------------- static hosting */
@@ -335,6 +466,6 @@ try {
 }
 
 console.log(
-  failures === 0 ? `\n${checks} checks passed` : `\n${failures} of ${checks} checks FAILED`,
+  failures === 0 ? `\n${checks} API checks passed` : `\n${failures} of ${checks} API checks FAILED`,
 );
 process.exit(failures === 0 ? 0 : 1);

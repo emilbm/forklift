@@ -1,9 +1,12 @@
 import type { Equipment, RegimenItem } from '../../shared/types';
 
-/** Weights are kilos throughout; only the display drops trailing zeroes. */
+/**
+ * Weights are kilos throughout; only the display drops trailing zeroes.
+ * Two decimals, because 1.25 kg plates exist and rounding them to 1.3 is a lie.
+ */
 export function formatWeight(kg: number | null | undefined): string {
   if (kg === null || kg === undefined) return '—';
-  return Number.isInteger(kg) ? String(kg) : kg.toFixed(1).replace(/\.0$/, '');
+  return String(Math.round(kg * 100) / 100);
 }
 
 export function formatReps(item: Pick<RegimenItem, 'repsMin' | 'repsMax'>): string {

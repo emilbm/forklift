@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { SetLog } from '../../../shared/types';
 import { api } from '../api';
-import { EmptyState, ErrorBanner, IconTrash, Sheet, Spinner } from '../components/ui';
+import { EmptyState, ErrorBanner, IconTrash, Sheet, Spinner, useConfirm } from '../components/ui';
 import { formatDate, formatDuration, formatWeight } from '../format';
 import { invalidateSessions, useExercises, useSession, useSessionHistory } from '../queries';
 
@@ -73,7 +73,9 @@ function SessionSheet({ sessionId, onClose }: { sessionId: number; onClose: () =
   const session = useSession(sessionId);
   const exercises = useExercises();
   const qc = useQueryClient();
+  const { confirm, dialog } = useConfirm();
   const [error, setError] = useState<unknown>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const name = useMemo(
     () => new Map((exercises.data ?? []).map((e) => [e.id, e.name])),
@@ -91,17 +93,27 @@ function SessionSheet({ sessionId, onClose }: { sessionId: number; onClose: () =
   }, [session.data?.sets]);
 
   async function destroy() {
-    if (!confirm('Delete this workout from your history?')) return;
+    const ok = await confirm({
+      title: 'Delete this workout?',
+      body: 'Its sets go with it. This cannot be undone.',
+      confirmLabel: 'Delete workout',
+      danger: true,
+    });
+    if (!ok) return;
+    setError(null);
+    setDeleting(true);
     try {
       await api.sessions.remove(sessionId);
       invalidateSessions(qc, sessionId);
       onClose();
     } catch (err) {
       setError(err);
+      setDeleting(false);
     }
   }
 
   return (
+    <>
     <Sheet title={session.data?.regimenName ?? 'Workout'} onClose={onClose}>
       {session.isLoading || !session.data ? (
         <Spinner />
@@ -132,11 +144,13 @@ function SessionSheet({ sessionId, onClose }: { sessionId: number; onClose: () =
             </p>
           )}
 
-          <button className="btn btn--danger btn--block" onClick={destroy}>
-            <IconTrash /> Delete workout
+          <button className="btn btn--danger btn--block" onClick={destroy} disabled={deleting}>
+            <IconTrash /> {deleting ? 'Deleting…' : 'Delete workout'}
           </button>
         </div>
       )}
     </Sheet>
+    {dialog}
+    </>
   );
 }

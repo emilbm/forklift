@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { equipment, exercises, platePools, regimens, sessions } from './store.js';
-import { supersetMatrix } from './superset.js';
+import { achievableWeights, planLoads, type PlateStock } from './plates.js';
+import { equipment, exercises, plates, regimens, sessions } from './store.js';
+import { supersetMatrix, type SupersetInput } from './superset.js';
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -10,9 +11,24 @@ const equipmentBody = z.object({
   kind: z
     .enum(['barbell', 'dumbbell', 'machine', 'cable', 'bench', 'rack', 'bodyweight', 'other'])
     .default('other'),
-  platePoolId: z.number().int().positive().nullable().default(null),
+  usesPlates: z.boolean().default(false),
+  barWeightKg: z.number().min(0).max(200).default(0),
   notes: z.string().max(500).default(''),
 });
+
+const plateBody = z.object({
+  // Quarter-kilo granularity covers every plate anyone actually owns.
+  weightKg: z
+    .number()
+    .positive()
+    .max(100)
+    .refine((w) => Math.round(w * 100) % 25 === 0, 'Use steps of 0.25 kg'),
+  count: z.number().int().min(0).max(99).default(0),
+});
+
+/** The plate collection in the shape the solver wants. */
+const currentStock = (): PlateStock[] =>
+  plates.list().map((p) => ({ weightKg: p.weightKg, count: p.count }));
 
 const exerciseBody = z.object({
   name: z.string().trim().min(1).max(80),
@@ -91,27 +107,72 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/health', async () => ({ ok: true }));
 
-  /* --------------------------------------------------------- plate pools */
+  /* -------------------------------------------------------------- plates */
 
-  app.get('/api/plate-pools', async () => platePools.list());
+  app.get('/api/plates', async () => plates.list());
 
-  app.post('/api/plate-pools', async (req, reply) => {
-    const { name } = z.object({ name: z.string().trim().min(1).max(80) }).parse(req.body);
-    return reply.status(201).send(platePools.create(name));
+  app.post('/api/plates', async (req, reply) => {
+    const { weightKg, count } = plateBody.parse(req.body);
+    return reply.status(201).send(plates.create(weightKg, count));
   });
 
-  app.put('/api/plate-pools/:id', async (req, reply) => {
+  app.put('/api/plates/:id', async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const { name } = z.object({ name: z.string().trim().min(1).max(80) }).parse(req.body);
-    const updated = platePools.update(id, name);
-    return updated ?? reply.status(404).send({ error: 'Plate pool not found' });
+    const { weightKg, count } = plateBody.parse(req.body);
+    const updated = plates.update(id, weightKg, count);
+    return updated ?? reply.status(404).send({ error: 'Plate not found' });
   });
 
-  app.delete('/api/plate-pools/:id', async (req, reply) => {
+  app.delete('/api/plates/:id', async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    return platePools.remove(id)
+    return plates.remove(id)
       ? reply.status(204).send()
-      : reply.status(404).send({ error: 'Plate pool not found' });
+      : reply.status(404).send({ error: 'Plate not found' });
+  });
+
+  /**
+   * Which loads can be assembled, and how. With one load this is a plate
+   * calculator; with several it answers whether they can be on the bars at once,
+   * which is what decides a superset.
+   */
+  app.post('/api/loads/plan', async (req, reply) => {
+    const { loads } = z
+      .object({
+        loads: z
+          .array(
+            z.object({
+              equipmentId: z.number().int().positive(),
+              targetKg: z.number().min(0).max(1000),
+            }),
+          )
+          .min(1)
+          .max(6),
+      })
+      .parse(req.body);
+
+    const byId = new Map(equipment.list().map((e) => [e.id, e]));
+    const missing = loads.find((load) => !byId.has(load.equipmentId));
+    if (missing) return reply.status(404).send({ error: 'Equipment not found' });
+
+    const outcome = planLoads(
+      loads.map((load) => ({
+        key: load.equipmentId,
+        barWeightKg: byId.get(load.equipmentId)!.barWeightKg,
+        targetKg: load.targetKg,
+      })),
+      currentStock(),
+    );
+
+    return {
+      feasible: outcome.feasible,
+      detail: outcome.detail,
+      plans: outcome.loads.map((load) => ({
+        equipmentId: load.key,
+        targetKg: load.targetKg,
+        barWeightKg: load.barWeightKg,
+        perSide: load.perSide,
+      })),
+    };
   });
 
   /* ----------------------------------------------------------- equipment */
@@ -133,6 +194,18 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return equipment.remove(id)
       ? reply.status(204).send()
       : reply.status(404).send({ error: 'Equipment not found' });
+  });
+
+  /** Every weight this equipment can actually be loaded to with the plates owned. */
+  app.get('/api/equipment/:id/loads', async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const item = equipment.get(id);
+    if (!item) return reply.status(404).send({ error: 'Equipment not found' });
+    return {
+      equipmentId: item.id,
+      barWeightKg: item.barWeightKg,
+      weights: item.usesPlates ? achievableWeights(item.barWeightKg, currentStock()) : [],
+    };
   });
 
   /* ----------------------------------------------------------- exercises */
@@ -193,8 +266,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Which pairs of exercises in a regimen could be supersetted, based purely on
-   * equipment and shared plate pools. No coaching judgement, just availability.
+   * Which pairs of exercises in a regimen could be supersetted, judged on
+   * equipment and on whether the plates can make both loads at once. No coaching
+   * judgement — just what the gym physically allows.
    */
   app.get('/api/regimens/:id/superset-pairs', async (req, reply) => {
     const { id } = idParam.parse(req.params);
@@ -203,11 +277,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     const equipmentById = new Map(equipment.list().map((e) => [e.id, e]));
     const byId = new Map(exercises.list().map((e) => [e.id, e]));
-    const inRegimen = regimen.items
-      .map((item) => byId.get(item.exerciseId))
-      .filter((e): e is NonNullable<typeof e> => e != null);
 
-    return supersetMatrix(inRegimen, equipmentById);
+    const inRegimen: SupersetInput[] = regimen.items.flatMap((item) => {
+      const exercise = byId.get(item.exerciseId);
+      if (!exercise) return [];
+      // Assume the heaviest weight used last time — the binding case for plates.
+      const history = sessions.lastPerformance(exercise.id);
+      const weights = (history?.sets ?? [])
+        .map((set) => set.weightKg)
+        .filter((w): w is number => w !== null);
+      return [{ exercise, weightKg: weights.length > 0 ? Math.max(...weights) : null }];
+    });
+
+    return supersetMatrix(inRegimen, equipmentById, currentStock());
   });
 
   /* ------------------------------------------------------------ sessions */

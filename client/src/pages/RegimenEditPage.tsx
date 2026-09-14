@@ -10,8 +10,9 @@ import {
   IconUp,
   Sheet,
   Spinner,
+  useConfirm,
 } from '../components/ui';
-import { formatReps } from '../format';
+import { formatReps, formatWeight } from '../format';
 import { useExercises, useRegimen, useRegimenMutations, useSupersetPairs } from '../queries';
 
 type Draft = RegimenInput['items'][number];
@@ -35,6 +36,7 @@ export default function RegimenEditPage() {
   const existing = useRegimen(regimenId);
   const exercises = useExercises();
   const { create, update, remove } = useRegimenMutations();
+  const { confirm, dialog } = useConfirm();
 
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
@@ -102,7 +104,13 @@ export default function RegimenEditPage() {
 
   async function destroy() {
     if (regimenId === null) return;
-    if (!confirm(`Delete “${name}”? Past workouts stay in your history.`)) return;
+    const ok = await confirm({
+      title: `Delete “${name}”?`,
+      body: 'Past workouts stay in your history.',
+      confirmLabel: 'Delete regimen',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await remove.mutateAsync(regimenId);
       navigate('/regimens');
@@ -298,6 +306,8 @@ export default function RegimenEditPage() {
         </div>
       </main>
 
+      {dialog}
+
       {picking && (
         <ExercisePicker
           onPick={(id) => {
@@ -318,8 +328,10 @@ function clamp(raw: string, min: number, max: number, fallback: number): number 
 }
 
 /**
- * Which pairs in the saved regimen could be supersetted. Reflects the last save,
- * so it lags unsaved edits — the note says so rather than pretending otherwise.
+ * Which pairs in the saved regimen could be supersetted. Judged on the equipment
+ * and on whether the plates can make both loads at once, using the weights from
+ * last time. Reflects the last save, so it lags unsaved edits — the note says so
+ * rather than pretending otherwise.
  */
 function SupersetSummary({ regimenId }: { regimenId: number }) {
   const pairs = useSupersetPairs(regimenId);
@@ -331,9 +343,18 @@ function SupersetSummary({ regimenId }: { regimenId: number }) {
     [exercises.data],
   );
 
-  const compatible = (pairs.data ?? []).filter((pair) => pair.compatible);
-  const blocked = (pairs.data ?? []).filter((pair) => !pair.compatible);
   if (!pairs.data || pairs.data.length === 0) return null;
+
+  const compatible = pairs.data.filter((pair) => pair.compatible);
+  const blocked = pairs.data.filter((pair) => !pair.compatible);
+  const label = (id: number) => name.get(id) ?? 'Unknown exercise';
+
+  /** The weights the plate check was judged against, when both are known. */
+  const basisNote = (pair: (typeof pairs.data)[number]) => {
+    const known = pair.basis.filter((b) => b.weightKg !== null);
+    if (known.length < pair.basis.length) return 'No weights logged yet — plates not checked.';
+    return `At ${known.map((b) => `${formatWeight(b.weightKg)} kg`).join(' and ')}.`;
+  };
 
   return (
     <div className="card">
@@ -354,24 +375,27 @@ function SupersetSummary({ regimenId }: { regimenId: number }) {
       </button>
 
       {open && (
-        <div className="stack" style={{ marginTop: 12, gap: 6 }}>
+        <div className="stack" style={{ marginTop: 12, gap: 8 }}>
           {compatible.map((pair) => (
             <p key={pair.exerciseIds.join('-')} className="small" style={{ margin: 0 }}>
-              <span className="chip chip--good">OK</span>{' '}
-              {name.get(pair.exerciseIds[0]) ?? '?'} + {name.get(pair.exerciseIds[1]) ?? '?'}
+              <span className="chip chip--good">OK</span> {label(pair.exerciseIds[0])} +{' '}
+              {label(pair.exerciseIds[1])}
+              <span className="tiny faint" style={{ display: 'block', paddingLeft: 4 }}>
+                {basisNote(pair)}
+              </span>
             </p>
           ))}
           {blocked.map((pair) => (
             <p key={pair.exerciseIds.join('-')} className="small muted" style={{ margin: 0 }}>
-              <span className="chip chip--pool">No</span> {name.get(pair.exerciseIds[0]) ?? '?'} +{' '}
-              {name.get(pair.exerciseIds[1]) ?? '?'}
+              <span className="chip chip--pool">No</span> {label(pair.exerciseIds[0])} +{' '}
+              {label(pair.exerciseIds[1])}
               <span className="tiny faint" style={{ display: 'block', paddingLeft: 4 }}>
                 {pair.conflicts[0]?.detail}
               </span>
             </p>
           ))}
           <p className="tiny faint" style={{ margin: '4px 0 0' }}>
-            Based on the last saved version, and on equipment alone.
+            Based on the last saved version, the equipment, and the plates you own.
           </p>
         </div>
       )}

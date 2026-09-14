@@ -459,6 +459,11 @@ textarea {
   animation: fade 0.15s ease;
 }
 
+/* Declared after the base rule so it wins at equal specificity. */
+.sheet-backdrop--top {
+  z-index: 70;
+}
+
 .sheet {
   width: 100%;
   max-width: 760px;

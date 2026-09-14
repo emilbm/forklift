@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 /* ------------------------------------------------------------------ icons */
 
@@ -104,10 +104,12 @@ interface SheetProps {
   title?: string;
   onClose: () => void;
   children: ReactNode;
+  /** Raise above another sheet, for a confirmation opened from inside one. */
+  onTop?: boolean;
 }
 
 /** A bottom sheet — reachable with a thumb, unlike a centred dialog. */
-export function Sheet({ title, onClose, children }: SheetProps) {
+export function Sheet({ title, onClose, children, onTop = false }: SheetProps) {
   const panel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,7 +127,7 @@ export function Sheet({ title, onClose, children }: SheetProps) {
 
   return (
     <div
-      className="sheet-backdrop"
+      className={`sheet-backdrop${onTop ? ' sheet-backdrop--top' : ''}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -169,4 +171,66 @@ export function EmptyState({ title, hint, action }: EmptyStateProps) {
       {action}
     </div>
   );
+}
+
+/* ----------------------------------------------------------- confirming */
+
+export interface ConfirmRequest {
+  title: string;
+  body?: string;
+  confirmLabel?: string;
+  danger?: boolean;
+}
+
+/**
+ * Asks the question in the page rather than through `window.confirm`, which some
+ * browsers suppress outright — when they do, the native dialog silently returns
+ * false and the button appears to do nothing at all.
+ */
+export function useConfirm(): {
+  confirm: (request: ConfirmRequest) => Promise<boolean>;
+  dialog: ReactNode;
+} {
+  const [pending, setPending] = useState<ConfirmRequest | null>(null);
+  const resolver = useRef<((answer: boolean) => void) | null>(null);
+
+  const confirm = useCallback((request: ConfirmRequest) => {
+    // Asking again supersedes an unanswered question; settle it so nothing
+    // is left awaiting a promise that can no longer be resolved.
+    resolver.current?.(false);
+    setPending(request);
+    return new Promise<boolean>((resolve) => {
+      resolver.current = resolve;
+    });
+  }, []);
+
+  const answer = useCallback((value: boolean) => {
+    setPending(null);
+    resolver.current?.(value);
+    resolver.current = null;
+  }, []);
+
+  const dialog = pending ? (
+    <Sheet title={pending.title} onClose={() => answer(false)} onTop>
+      <div className="stack">
+        {pending.body && (
+          <p className="small muted" style={{ margin: 0 }}>
+            {pending.body}
+          </p>
+        )}
+        <button
+          className={`btn btn--block btn--lg ${pending.danger ? 'btn--danger' : 'btn--primary'}`}
+          onClick={() => answer(true)}
+          autoFocus
+        >
+          {pending.confirmLabel ?? 'Confirm'}
+        </button>
+        <button className="btn btn--ghost btn--block" onClick={() => answer(false)}>
+          Cancel
+        </button>
+      </div>
+    </Sheet>
+  ) : null;
+
+  return { confirm, dialog };
 }
