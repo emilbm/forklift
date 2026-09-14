@@ -1,0 +1,38 @@
+# Forklift on the apps server. Pulls the image built by GitHub Actions, so the
+# repo doesn't need to be checked out there.
+#
+#   docker compose pull && docker compose up -d
+#
+# Pin FORKLIFT_TAG to a commit sha (or a version tag) to deploy something other
+# than the latest build:
+#
+#   FORKLIFT_TAG=sha-<full-sha> docker compose up -d
+
+services:
+  forklift:
+    image: ghcr.io/emilbm/forklift:${FORKLIFT_TAG:-latest}
+    container_name: forklift
+    restart: unless-stopped
+    ports:
+      # LAN only. Point a Cloudflare tunnel at this for outside access, and put
+      # Cloudflare Access in front of it — the app itself has no authentication.
+      - "8080:8080"
+    volumes:
+      # Named volume by default. Swap for a bind mount (- /srv/forklift:/data)
+      # if it's easier to fold into the host's backup job.
+      - forklift-data:/data
+    environment:
+      TZ: Europe/Copenhagen
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  forklift-data:

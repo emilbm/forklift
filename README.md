@@ -56,21 +56,47 @@ network to try the touch targets for real.
 
 Data goes to `./data/forklift.db` (gitignored).
 
-### On the homelab
+### On the apps server
+
+Every push to `main` typechecks, runs the tests, and publishes an image to
+`ghcr.io/emilbm/forklift:latest` (also tagged `sha-<commit>`, and with the
+version for `v*` tags). Copy `deploy/docker-compose.yml` to the server and:
 
 ```bash
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
 
-Serves the app and API on port `8080` and keeps the database in the
-`forklift-data` volume.
+Serves the app and API on port `8080`, with the database in the `forklift-data`
+volume. To roll back or pin a build, set the tag:
 
-To point it at a host directory instead — easier to fold into an existing backup
-job — swap the volume for a bind mount:
+```bash
+FORKLIFT_TAG=sha-<full-commit-sha> docker compose up -d
+```
+
+To point storage at a host directory instead — easier to fold into an existing
+backup job — swap the volume for a bind mount:
 
 ```yaml
 volumes:
   - /srv/forklift:/data
+```
+
+**First deploy only:** GHCR packages start out private, even for a public repo.
+Either make it public once (repo → Packages → forklift → Package settings →
+Change visibility), or log the server in with a personal access token that has
+`read:packages`:
+
+```bash
+echo <token> | docker login ghcr.io -u emilbm --password-stdin
+```
+
+### Building the image locally
+
+The compose file at the repo root builds from the working copy instead, which is
+the one to use when changing the Dockerfile:
+
+```bash
+docker compose up -d --build
 ```
 
 ### Exposure
@@ -142,6 +168,8 @@ npm test
 
 Runs the plate arithmetic against known loadings, then boots the API on a
 throwaway database and exercises the whole flow, including the superset rules.
+CI runs this plus `npm run typecheck` and a client build before any image is
+published, so `latest` is always a build that passed.
 
 ## Not built yet
 

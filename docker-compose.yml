@@ -1,7 +1,10 @@
+# Builds from this working copy — for developing on the image itself.
+# To deploy the image built by CI instead, use deploy/docker-compose.yml.
+
 services:
   forklift:
     build: .
-    image: forklift:latest
+    image: forklift:local
     container_name: forklift
     restart: unless-stopped
     ports:
