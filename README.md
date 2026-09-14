@@ -81,14 +81,19 @@ volumes:
   - /srv/forklift:/data
 ```
 
-**First deploy only:** GHCR packages start out private, even for a public repo.
-Either make it public once (repo → Packages → forklift → Package settings →
-Change visibility), or log the server in with a personal access token that has
-`read:packages`:
+The package is public, so the server pulls it without logging in. If you ever
+make the repo private, the package follows, and the server then needs a personal
+access token with `read:packages`:
 
 ```bash
 echo <token> | docker login ghcr.io -u emilbm --password-stdin
 ```
+
+The image is built for **linux/amd64** only, which is what Proxmox runs. It will
+not run on an arm64 machine — build locally with the root compose file there
+instead. To publish arm64 as well, add it to `platforms` in
+`.github/workflows/build.yml`; it builds under emulation, so expect it to be
+slower.
 
 ### Building the image locally
 
