@@ -20,6 +20,9 @@ interface EquipmentRow {
   kind: string;
   uses_plates: number;
   bar_weight_kg: number;
+  increment_kg: number;
+  min_weight_kg: number;
+  max_weight_kg: number;
   notes: string;
 }
 
@@ -31,6 +34,7 @@ interface RegimenItemRow {
   reps_min: number;
   reps_max: number;
   rest_seconds: number;
+  superset_with_next: number;
   notes: string;
 }
 
@@ -66,6 +70,9 @@ const toEquipment = (r: EquipmentRow): Equipment => ({
   kind: r.kind as EquipmentKind,
   usesPlates: r.uses_plates === 1,
   barWeightKg: r.bar_weight_kg,
+  incrementKg: r.increment_kg,
+  minWeightKg: r.min_weight_kg,
+  maxWeightKg: r.max_weight_kg,
   notes: r.notes,
 });
 
@@ -77,6 +84,7 @@ const toRegimenItem = (r: RegimenItemRow): RegimenItem => ({
   repsMin: r.reps_min,
   repsMax: r.reps_max,
   restSeconds: r.rest_seconds,
+  supersetWithNext: r.superset_with_next === 1,
   notes: r.notes,
 });
 
@@ -128,6 +136,9 @@ export interface EquipmentInput {
   kind: EquipmentKind;
   usesPlates: boolean;
   barWeightKg: number;
+  incrementKg: number;
+  minWeightKg: number;
+  maxWeightKg: number;
   notes: string;
 }
 
@@ -141,22 +152,33 @@ export const equipment = {
   },
   create(input: EquipmentInput): Equipment {
     const { lastInsertRowid } = run(
-      'INSERT INTO equipment (name, kind, uses_plates, bar_weight_kg, notes) VALUES (?, ?, ?, ?, ?)',
+      `INSERT INTO equipment
+         (name, kind, uses_plates, bar_weight_kg, increment_kg, min_weight_kg, max_weight_kg, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       input.name,
       input.kind,
       input.usesPlates ? 1 : 0,
       input.barWeightKg,
+      input.incrementKg,
+      input.minWeightKg,
+      input.maxWeightKg,
       input.notes,
     );
     return equipment.get(lastInsertRowid)!;
   },
   update(id: number, input: EquipmentInput): Equipment | null {
     run(
-      'UPDATE equipment SET name = ?, kind = ?, uses_plates = ?, bar_weight_kg = ?, notes = ? WHERE id = ?',
+      `UPDATE equipment
+          SET name = ?, kind = ?, uses_plates = ?, bar_weight_kg = ?,
+              increment_kg = ?, min_weight_kg = ?, max_weight_kg = ?, notes = ?
+        WHERE id = ?`,
       input.name,
       input.kind,
       input.usesPlates ? 1 : 0,
       input.barWeightKg,
+      input.incrementKg,
+      input.minWeightKg,
+      input.maxWeightKg,
       input.notes,
       id,
     );
@@ -236,6 +258,7 @@ export interface RegimenItemInput {
   repsMin: number;
   repsMax: number;
   restSeconds: number;
+  supersetWithNext: boolean;
   notes: string;
 }
 
@@ -256,8 +279,9 @@ function insertItems(regimenId: number, items: RegimenItemInput[]): void {
   items.forEach((item, index) => {
     run(
       `INSERT INTO regimen_items
-         (regimen_id, exercise_id, position, sets, reps_min, reps_max, rest_seconds, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (regimen_id, exercise_id, position, sets, reps_min, reps_max, rest_seconds,
+          superset_with_next, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       regimenId,
       item.exerciseId,
       index,
@@ -265,6 +289,8 @@ function insertItems(regimenId: number, items: RegimenItemInput[]): void {
       item.repsMin,
       item.repsMax,
       item.restSeconds,
+      // A link on the last item has nothing to link to.
+      item.supersetWithNext && index < items.length - 1 ? 1 : 0,
       item.notes,
     );
   });

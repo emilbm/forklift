@@ -178,6 +178,27 @@ const MIGRATIONS: string[] = [
   ALTER TABLE equipment_v2 RENAME TO equipment;
   DROP TABLE plate_pools;
   `,
+
+  // 3 — fixed weight ladders, and supersets.
+  //
+  // Not everything is loaded with plates: a dumbbell rack goes 2 to 32 kg in
+  // 2 kg steps, and a weight stack has its own increment. Recording the ladder
+  // means the weight control can offer what exists instead of a generic step.
+  //
+  // `superset_with_next` links an item to the one after it. Storing the link
+  // rather than a group id makes a non-contiguous group unrepresentable.
+  `
+  ALTER TABLE equipment ADD COLUMN increment_kg  REAL NOT NULL DEFAULT 0;
+  ALTER TABLE equipment ADD COLUMN min_weight_kg REAL NOT NULL DEFAULT 0;
+  ALTER TABLE equipment ADD COLUMN max_weight_kg REAL NOT NULL DEFAULT 0;
+
+  -- A sensible starting point for existing dumbbells; editable like anything else.
+  UPDATE equipment
+     SET increment_kg = 2, min_weight_kg = 2, max_weight_kg = 32
+   WHERE kind = 'dumbbell' AND uses_plates = 0;
+
+  ALTER TABLE regimen_items ADD COLUMN superset_with_next INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function migrate(): void {

@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Equipment, RegimenItem, SetLog } from '../../../shared/types';
+import { currentStepIndex, planWorkout } from '../../../shared/plan';
 import { api } from '../api';
 import { RestTimer, type RestState } from '../components/RestTimer';
 import { ErrorBanner, IconCheck, IconClose, Sheet, Spinner } from '../components/ui';
@@ -47,7 +48,13 @@ export default function WorkoutPage() {
     [exercises.data],
   );
 
-  const items = regimen.data?.items ?? [];
+  const items = useMemo(() => regimen.data?.items ?? [], [regimen.data]);
+
+  /**
+   * The order the sets are actually done in. A supersetted pair alternates —
+   * A1, B1, A2, B2 — so progress is tracked by step, not by exercise.
+   */
+  const steps = useMemo(() => planWorkout(items), [items]);
 
   /** Sets already logged for each regimen item, in the order they were done. */
   const setsByItem = useMemo(() => {
@@ -61,19 +68,29 @@ export default function WorkoutPage() {
     return map;
   }, [session.data?.sets]);
 
-  const firstUnfinished = useMemo(() => {
-    const at = items.findIndex((item) => (setsByItem.get(item.id)?.length ?? 0) < item.sets);
-    return at === -1 ? Math.max(0, items.length - 1) : at;
-  }, [items, setsByItem]);
+  const completedByItem = useMemo(
+    () => new Map([...setsByItem].map(([id, logs]) => [id, logs.length])),
+    [setsByItem],
+  );
+
+  const outstanding = useMemo(
+    () => currentStepIndex(steps, completedByItem),
+    [steps, completedByItem],
+  );
 
   // Follow progress automatically until the lifter picks an exercise by hand.
   useEffect(() => {
-    if (followProgress) setIndex(firstUnfinished);
-  }, [firstUnfinished, followProgress]);
+    if (followProgress && outstanding >= 0) setIndex(outstanding);
+  }, [outstanding, followProgress]);
 
-  const item = items[Math.min(index, Math.max(0, items.length - 1))];
+  const step = steps[Math.min(index, Math.max(0, steps.length - 1))];
+  const item = step?.item;
   const done = setsByItem.get(item?.id ?? -1) ?? [];
-  const allDone = items.length > 0 && items.every((i) => (setsByItem.get(i.id)?.length ?? 0) >= i.sets);
+  const allDone = steps.length > 0 && outstanding === -1;
+
+  /** The other exercises in this superset, in the order they come round. */
+  const partners = (step?.group ?? []).filter((other) => other.id !== item?.id);
+  const upNext = steps[index + 1];
 
   const lastTime = useLastPerformance(item?.exerciseId ?? null, sessionId);
 
@@ -91,20 +108,25 @@ export default function WorkoutPage() {
 
   const weight = item && item.id in weights ? weights[item.id]! : suggestedWeight;
 
-  // The bar this exercise loads, if any — what makes a plate breakdown possible.
-  const bar = useMemo((): Equipment | null => {
+  /**
+   * What decides the weights on offer: a plate-loaded bar, or a rack or stack
+   * with a fixed ladder. Either way the stepper moves between real weights.
+   */
+  const weightSource = useMemo((): Equipment | null => {
     if (!item) return null;
     const exercise = (exercises.data ?? []).find((e) => e.id === item.exerciseId);
     if (!exercise) return null;
     const byId = new Map((equipment.data ?? []).map((e) => [e.id, e]));
-    for (const id of exercise.equipmentIds) {
-      const candidate = byId.get(id);
-      if (candidate?.usesPlates) return candidate;
-    }
-    return null;
+    const candidates = exercise.equipmentIds
+      .map((id) => byId.get(id))
+      .filter((e): e is Equipment => e !== undefined);
+    return (
+      candidates.find((e) => e.usesPlates) ?? candidates.find((e) => e.incrementKg > 0) ?? null
+    );
   }, [item, exercises.data, equipment.data]);
 
-  const loadable = useEquipmentLoads(bar?.id ?? null);
+  const bar = weightSource?.usesPlates ? weightSource : null;
+  const loadable = useEquipmentLoads(weightSource?.id ?? null);
   const achievable = loadable.data?.weights ?? [];
 
   if (session.isLoading || (session.data?.regimenId !== null && regimen.isLoading)) {
@@ -153,10 +175,11 @@ export default function WorkoutPage() {
         weightKg: weight,
       });
       invalidateSessions(qc, sessionId);
-      // Last set of the exercise needs no rest prompt — the next lift is a change of station.
-      const wasLast = done.length + 1 >= item.sets;
-      if (!wasLast) {
-        setRest({ endsAt: Date.now() + item.restSeconds * 1000, duration: item.restSeconds });
+      // The plan decides the rest: none between the halves of a superset, none
+      // after the final round, otherwise the length the regimen prescribes.
+      const seconds = step?.restSeconds ?? 0;
+      if (seconds > 0) {
+        setRest({ endsAt: Date.now() + seconds * 1000, duration: seconds });
       }
     } catch (err) {
       setError(err);
@@ -195,7 +218,7 @@ export default function WorkoutPage() {
    * 2.5 kg that might land on something unloadable.
    */
   const stepWeight = (direction: 1 | -1) => {
-    const current = weight ?? bar?.barWeightKg ?? 0;
+    const current = weight ?? weightSource?.barWeightKg ?? 0;
     if (achievable.length === 0) {
       setWeight(Math.max(0, current + direction * FALLBACK_STEP));
       return;
@@ -207,11 +230,11 @@ export default function WorkoutPage() {
     if (next !== undefined) setWeight(next);
   };
 
-  const nextLabel = item
-    ? done.length + 1 >= item.sets
-      ? 'Last set done — next exercise up'
-      : `Next: set ${done.length + 1} of ${item.sets}`
-    : '';
+  const nextLabel = upNext
+    ? `Next: ${exerciseName.get(upNext.item.exerciseId) ?? 'next exercise'}, set ${
+        upNext.setIndex + 1
+      } of ${upNext.item.sets}`
+    : 'Last set — workout done after this';
 
   return (
     <>
@@ -236,21 +259,31 @@ export default function WorkoutPage() {
         <ErrorBanner error={error} />
 
         <div className="exnav">
-          {items.map((entry, i) => {
+          {items.map((entry) => {
             const logged = setsByItem.get(entry.id)?.length ?? 0;
             const complete = logged >= entry.sets;
+            const linked = entry.supersetWithNext || steps.some(
+              (other) => other.group.includes(entry) && other.group.length > 1,
+            );
             return (
               <button
                 key={entry.id}
-                className={`exnav__item${i === index ? ' exnav__item--current' : ''}${
+                className={`exnav__item${entry.id === item?.id ? ' exnav__item--current' : ''}${
                   complete ? ' exnav__item--done' : ''
-                }`}
+                }${linked ? ' exnav__item--linked' : ''}`}
                 onClick={() => {
                   setFollowProgress(false);
-                  setIndex(i);
+                  // Jump to this exercise's next outstanding set, not to set one.
+                  const target = steps.findIndex(
+                    (candidate) =>
+                      candidate.item.id === entry.id && candidate.setIndex >= Math.min(logged, entry.sets - 1),
+                  );
+                  if (target >= 0) setIndex(target);
                 }}
               >
-                {complete && <IconCheck size={13} />} {exerciseName.get(entry.exerciseId) ?? '?'}{' '}
+                {complete && <IconCheck size={13} />}
+                {linked && '⇄ '}
+                {exerciseName.get(entry.exerciseId) ?? '?'}{' '}
                 <span className="num faint">
                   {logged}/{entry.sets}
                 </span>
@@ -274,7 +307,9 @@ export default function WorkoutPage() {
                     {exerciseName.get(item.exerciseId) ?? 'Unknown exercise'}
                   </h2>
                   <div className="wk-target num" style={{ marginTop: 4 }}>
-                    {done.length}
+                    {/* Sets actually logged. Keeps telling the truth if you work
+                        past the prescription, which the plan no longer tracks. */}
+                    <span>{done.length}</span>
                     <small>of {item.sets} sets</small>
                     <span className="faint" style={{ fontSize: '1.1rem' }}>
                       ·
@@ -283,6 +318,15 @@ export default function WorkoutPage() {
                   </div>
                 </div>
               </div>
+
+              {partners.length > 0 && (
+                <div className="superset-note">
+                  ⇄ Superset with {partners.map((p) => exerciseName.get(p.exerciseId) ?? '?').join(' and ')}
+                  {step?.restSeconds === 0 && upNext && upNext.group === step.group
+                    ? ' — go straight there, no rest'
+                    : ''}
+                </div>
+              )}
 
               {lastTime.data && (
                 <p className="tiny faint" style={{ margin: '8px 0 0' }}>
@@ -353,7 +397,17 @@ export default function WorkoutPage() {
                   </button>
                 </div>
               </div>
-              {bar && <PlateBreakdown bar={bar} targetKg={weight} />}
+              {bar ? (
+                <PlateBreakdown bar={bar} targetKg={weight} />
+              ) : (
+                weightSource?.incrementKg ? (
+                  <p className="tiny faint" style={{ margin: '10px 0 0' }}>
+                    {weightSource.kind === 'dumbbell' ? 'Per dumbbell. ' : ''}
+                    {formatWeight(weightSource.minWeightKg)}–{formatWeight(weightSource.maxWeightKg)} kg
+                    in {formatWeight(weightSource.incrementKg)} kg steps.
+                  </p>
+                ) : null
+              )}
             </div>
 
             <div className="card">

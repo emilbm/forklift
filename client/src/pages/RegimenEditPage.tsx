@@ -13,7 +13,13 @@ import {
   useConfirm,
 } from '../components/ui';
 import { formatReps, formatWeight } from '../format';
-import { useExercises, useRegimen, useRegimenMutations, useSupersetPairs } from '../queries';
+import {
+  useEquipment,
+  useExercises,
+  useRegimen,
+  useRegimenMutations,
+  useSupersetPairs,
+} from '../queries';
 
 type Draft = RegimenInput['items'][number];
 
@@ -25,6 +31,7 @@ const newItem = (exerciseId: number): Draft => ({
   repsMin: 8,
   repsMax: 12,
   restSeconds: 90,
+  supersetWithNext: false,
   notes: '',
 });
 
@@ -35,6 +42,7 @@ export default function RegimenEditPage() {
 
   const existing = useRegimen(regimenId);
   const exercises = useExercises();
+  const equipment = useEquipment();
   const { create, update, remove } = useRegimenMutations();
   const { confirm, dialog } = useConfirm();
 
@@ -56,6 +64,7 @@ export default function RegimenEditPage() {
         repsMin: item.repsMin,
         repsMax: item.repsMax,
         restSeconds: item.restSeconds,
+        supersetWithNext: item.supersetWithNext,
         notes: item.notes,
       })),
     );
@@ -67,8 +76,43 @@ export default function RegimenEditPage() {
     [exercises.data],
   );
 
+  const exerciseById = useMemo(
+    () => new Map((exercises.data ?? []).map((e) => [e.id, e])),
+    [exercises.data],
+  );
+
+  const equipmentName = useMemo(
+    () => new Map((equipment.data ?? []).map((e) => [e.id, e.name])),
+    [equipment.data],
+  );
+
   const patch = (index: number, changes: Partial<Draft>) =>
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...changes } : item)));
+
+  /**
+   * Equipment both exercises need. A superset alternates set for set, so sharing
+   * a bench or a bar makes it impossible rather than merely awkward — the server
+   * rejects it too, this just says so before you save.
+   */
+  const clashBetween = (first: Draft | undefined, second: Draft | undefined): string | null => {
+    if (!first || !second) return null;
+    const a = exerciseById.get(first.exerciseId);
+    const b = exerciseById.get(second.exerciseId);
+    if (!a || !b) return null;
+    const shared = a.equipmentIds.filter((id) => b.equipmentIds.includes(id));
+    if (shared.length === 0) return null;
+    return `Both need ${shared.map((id) => equipmentName.get(id) ?? 'the same equipment').join(', ')}.`;
+  };
+
+  const toggleSuperset = (index: number) => {
+    const clash = clashBetween(items[index], items[index + 1]);
+    if (clash && !items[index]?.supersetWithNext) {
+      setError(new Error(`Can't superset these two. ${clash}`));
+      return;
+    }
+    setError(null);
+    patch(index, { supersetWithNext: !items[index]?.supersetWithNext });
+  };
 
   const move = (index: number, delta: number) =>
     setItems((prev) => {
@@ -77,7 +121,13 @@ export default function RegimenEditPage() {
       const next = [...prev];
       const [moved] = next.splice(index, 1);
       next.splice(target, 0, moved!);
-      return next;
+      // Reordering would otherwise leave a link pointing at a new neighbour that
+      // might share equipment, so the two items involved are unlinked.
+      return next.map((entry, i) =>
+        i === target || i === target - 1 || i === index || i === index - 1
+          ? { ...entry, supersetWithNext: false }
+          : entry,
+      );
     });
 
   async function save() {
@@ -174,7 +224,8 @@ export default function RegimenEditPage() {
           )}
 
           {items.map((item, index) => (
-            <div key={`${item.exerciseId}-${index}`} className="card">
+            <div key={`${item.exerciseId}-${index}`}>
+            <div className="card">
               <div className="row row--between" style={{ marginBottom: 10 }}>
                 <span className="grow">
                   <span className="faint tiny num">{index + 1}</span>{' '}
@@ -269,8 +320,20 @@ export default function RegimenEditPage() {
               </div>
 
               <p className="tiny faint" style={{ margin: '8px 0 0' }}>
-                {item.sets} × {formatReps(item)} reps, {item.restSeconds}s between sets
+                {item.sets} × {formatReps(item)} reps,{' '}
+                {item.supersetWithNext
+                  ? 'rest after the pair'
+                  : `${item.restSeconds}s between sets`}
               </p>
+            </div>
+
+            {index < items.length - 1 && (
+              <SupersetLink
+                linked={item.supersetWithNext}
+                clash={clashBetween(item, items[index + 1])}
+                onToggle={() => toggleSuperset(index)}
+              />
+            )}
             </div>
           ))}
 
@@ -318,6 +381,43 @@ export default function RegimenEditPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * The join between two consecutive exercises. Linked means they're alternated
+ * set for set with no rest in between; equipment they share makes that
+ * impossible, so the control says why instead of offering it.
+ */
+function SupersetLink({
+  linked,
+  clash,
+  onToggle,
+}: {
+  linked: boolean;
+  clash: string | null;
+  onToggle: () => void;
+}) {
+  if (clash && !linked) {
+    return (
+      <p className="tiny faint" style={{ margin: '6px 0 0', paddingLeft: 14 }}>
+        Can't superset with the next one — {clash.replace(/^Both need /, 'both need ')}
+      </p>
+    );
+  }
+
+  return (
+    <div className="superset-link">
+      <button
+        className={`btn btn--sm ${linked ? 'btn--primary' : 'btn--ghost'}`}
+        onClick={onToggle}
+      >
+        {linked ? '⇄ Supersetted' : '⇄ Superset with next'}
+      </button>
+      {linked && (
+        <span className="tiny faint">Alternate sets, no rest between them</span>
+      )}
+    </div>
   );
 }
 

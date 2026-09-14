@@ -21,8 +21,14 @@ const blank = (): EquipmentInput => ({
   kind: 'barbell',
   usesPlates: true,
   barWeightKg: 20,
+  incrementKg: 0,
+  minWeightKg: 0,
+  maxWeightKg: 0,
   notes: '',
 });
+
+/** A dumbbell rack is the common case for a fixed ladder, so offer it ready-made. */
+const DUMBBELL_LADDER = { incrementKg: 2, minWeightKg: 2, maxWeightKg: 32 };
 
 export default function EquipmentPage() {
   const equipment = useEquipment();
@@ -114,10 +120,17 @@ export default function EquipmentPage() {
                           </span>
                         )}
                       </span>
-                      {item.usesPlates && (
+                      {item.usesPlates ? (
                         <span className="chip chip--accent num">
                           {formatWeight(item.barWeightKg)} kg bar
                         </span>
+                      ) : (
+                        item.incrementKg > 0 && (
+                          <span className="chip num">
+                            {formatWeight(item.minWeightKg)}–{formatWeight(item.maxWeightKg)} kg /{' '}
+                            {formatWeight(item.incrementKg)}
+                          </span>
+                        )
                       )}
                     </button>
                   ))}
@@ -152,6 +165,9 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
           kind: initial.kind,
           usesPlates: initial.usesPlates,
           barWeightKg: initial.barWeightKg,
+          incrementKg: initial.incrementKg,
+          minWeightKg: initial.minWeightKg,
+          maxWeightKg: initial.maxWeightKg,
           notes: initial.notes,
         }
       : blank(),
@@ -164,7 +180,17 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
     try {
       const input = { ...form, name: form.name.trim() };
       if (!input.name) throw new Error('Give the equipment a name');
-      if (!input.usesPlates) input.barWeightKg = 0;
+      if (input.usesPlates) {
+        // Plate-loaded gear gets its weights from the plates, not a ladder.
+        input.incrementKg = 0;
+        input.minWeightKg = 0;
+        input.maxWeightKg = 0;
+      } else {
+        input.barWeightKg = 0;
+        if (input.incrementKg > 0 && input.maxWeightKg < input.minWeightKg) {
+          throw new Error('The heaviest weight must be at least the lightest');
+        }
+      }
       if (initial) await update.mutateAsync({ id: initial.id, input });
       else await create.mutateAsync(input);
       onClose();
@@ -215,7 +241,16 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
               id="eq-kind"
               className="select"
               value={form.kind}
-              onChange={(e) => setForm({ ...form, kind: e.target.value as Equipment['kind'] })}
+              onChange={(e) => {
+                const kind = e.target.value as Equipment['kind'];
+                // Picking "dumbbell" on new equipment fills in the usual rack.
+                const wantsLadder = kind === 'dumbbell' && !initial && form.incrementKg === 0;
+                setForm({
+                  ...form,
+                  kind,
+                  ...(wantsLadder ? { usesPlates: false, ...DUMBBELL_LADDER } : {}),
+                });
+              }}
             >
               {EQUIPMENT_KINDS.map((k) => (
                 <option key={k.value} value={k.value}>
@@ -233,6 +268,58 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
             />
             <span className="grow">Loaded with plates</span>
           </label>
+
+          {!form.usesPlates && (
+            <div className="field">
+              <label>Fixed weights available</label>
+              <div className="row" style={{ gap: 8, alignItems: 'flex-end' }}>
+                <div className="field grow">
+                  <label htmlFor="eq-min">From</label>
+                  <input
+                    id="eq-min"
+                    className="input input--num"
+                    type="number"
+                    inputMode="decimal"
+                    step={0.5}
+                    min={0}
+                    value={form.minWeightKg}
+                    onChange={(e) => setForm({ ...form, minWeightKg: Number(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className="field grow">
+                  <label htmlFor="eq-max">To</label>
+                  <input
+                    id="eq-max"
+                    className="input input--num"
+                    type="number"
+                    inputMode="decimal"
+                    step={0.5}
+                    min={0}
+                    value={form.maxWeightKg}
+                    onChange={(e) => setForm({ ...form, maxWeightKg: Number(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className="field grow">
+                  <label htmlFor="eq-step">In steps of</label>
+                  <input
+                    id="eq-step"
+                    className="input input--num"
+                    type="number"
+                    inputMode="decimal"
+                    step={0.5}
+                    min={0}
+                    value={form.incrementKg}
+                    onChange={(e) => setForm({ ...form, incrementKg: Number(e.target.value) || 0 })}
+                  />
+                </div>
+              </div>
+              <p className="tiny faint" style={{ margin: 0 }}>
+                {form.kind === 'dumbbell'
+                  ? 'Per dumbbell — a rack of 2 to 32 kg in 2 kg steps is 2 / 32 / 2.'
+                  : 'The weights this can actually be set to. Leave the step at 0 to type any weight.'}
+              </p>
+            </div>
+          )}
 
           {form.usesPlates && (
             <div className="field">

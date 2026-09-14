@@ -32,6 +32,14 @@ export interface Equipment {
   usesPlates: boolean;
   /** Weight of the bar or carriage itself, before any plates. */
   barWeightKg: number;
+  /**
+   * Fixed weight ladder, for equipment that isn't plate-loaded: a dumbbell rack
+   * running 2–32 kg in 2 kg steps, or a stack with its own increment. An
+   * increment of 0 means there is no ladder and any weight can be entered.
+   */
+  incrementKg: number;
+  minWeightKg: number;
+  maxWeightKg: number;
   notes: string;
 }
 
@@ -53,6 +61,11 @@ export interface RegimenItem {
   repsMin: number;
   repsMax: number;
   restSeconds: number;
+  /**
+   * Performed as a superset with the item after it: alternate their sets, with
+   * no rest in between. The last item in a regimen is never linked.
+   */
+  supersetWithNext: boolean;
   notes: string;
 }
 

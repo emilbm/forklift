@@ -798,3 +798,39 @@ textarea {
     grid-template-columns: repeat(6, 1fr);
   }
 }
+
+/* ------------------------------------------------------- superset link */
+
+/* The join between two exercises in the regimen editor, drawn as a connector
+   so a linked pair reads as one block rather than two neighbours. */
+.superset-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 8px 14px;
+  margin-left: 18px;
+  border-left: 2px dashed var(--border-strong);
+}
+
+.superset-link:has(.btn--primary) {
+  border-left-color: var(--accent);
+}
+
+/* Marks a supersetted exercise in workout mode's exercise strip. */
+.exnav__item--linked {
+  border-color: var(--accent-dim);
+}
+
+.superset-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--accent-dim);
+  color: #ffb774;
+  font-size: 0.8rem;
+  font-weight: 600;
+}

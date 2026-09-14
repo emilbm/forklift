@@ -135,7 +135,13 @@ try {
     usesPlates: true,
     barWeightKg: 8.5,
   });
-  const dumbbells = await call('POST', '/equipment', { name: 'Dumbbells', kind: 'dumbbell' });
+  const dumbbells = await call('POST', '/equipment', {
+    name: 'Dumbbells',
+    kind: 'dumbbell',
+    incrementKg: 2,
+    minWeightKg: 2,
+    maxWeightKg: 32,
+  });
   const bench = await call('POST', '/equipment', { name: 'Bench', kind: 'bench' });
   check(
     'creates equipment',
@@ -166,11 +172,23 @@ try {
   check('reports 60 kg as loadable', loads.body.weights.includes(60), true);
   check('does not report 21 kg as loadable', !loads.body.weights.includes(21), true);
 
-  const noPlateLoads = await call('GET', `/equipment/${dumbbells.body.id}/loads`);
+  const rack = await call('GET', `/equipment/${dumbbells.body.id}/loads`);
   check(
-    'reports no loadable weights for equipment without plates',
-    noPlateLoads.body.weights.length === 0,
-    noPlateLoads.body,
+    'walks a dumbbell rack in its own increments',
+    rack.body.weights[0] === 2 && rack.body.weights[1] === 4 && rack.body.weights.at(-1) === 32,
+    rack.body.weights,
+  );
+  check(
+    'offers only whole steps of the rack',
+    !rack.body.weights.includes(3) && rack.body.weights.length === 16,
+    rack.body.weights.length,
+  );
+
+  const bench2 = await call('GET', `/equipment/${bench.body.id}/loads`);
+  check(
+    'reports nothing for equipment with neither plates nor a ladder',
+    bench2.body.weights.length === 0,
+    bench2.body,
   );
 
   const singlePlan = await call('POST', '/loads/plan', {
@@ -415,6 +433,78 @@ try {
     `/exercises/${deadlift.body.id}/last-performance?exclude=${sessionId}`,
   );
   check('can exclude the current session', excluded.status === 404, excluded.status);
+
+  /* -------------------------------------------------------------- supersets */
+
+  const supersetOk = await call('POST', '/regimens', {
+    name: 'B - Supersets',
+    items: [
+      {
+        exerciseId: curl.body.id,
+        sets: 3,
+        repsMin: 10,
+        repsMax: 15,
+        restSeconds: 60,
+        supersetWithNext: true,
+      },
+      { exerciseId: row.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 60 },
+    ],
+  });
+  check(
+    'accepts a superset of exercises with separate equipment',
+    supersetOk.status === 201,
+    supersetOk,
+  );
+  check(
+    'stores the link',
+    supersetOk.body?.items[0].supersetWithNext === true &&
+      supersetOk.body.items[1].supersetWithNext === false,
+    supersetOk.body?.items.map((i) => i.supersetWithNext),
+  );
+
+  const supersetClash = await call('POST', '/regimens', {
+    name: 'C - Impossible',
+    items: [
+      {
+        exerciseId: press.body.id,
+        sets: 3,
+        repsMin: 8,
+        repsMax: 12,
+        restSeconds: 90,
+        supersetWithNext: true,
+      },
+      { exerciseId: row.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 60 },
+    ],
+  });
+  check(
+    'refuses a superset whose exercises need the same equipment',
+    supersetClash.status === 400,
+    supersetClash,
+  );
+  check(
+    'and names the equipment they clash on',
+    (supersetClash.body?.error ?? '').includes('Bench'),
+    supersetClash.body?.error,
+  );
+
+  const trailingLink = await call('POST', '/regimens', {
+    name: 'D - Trailing link',
+    items: [
+      {
+        exerciseId: curl.body.id,
+        sets: 2,
+        repsMin: 10,
+        repsMax: 15,
+        restSeconds: 60,
+        supersetWithNext: true,
+      },
+    ],
+  });
+  check(
+    'drops a link on the last item, which has nothing to link to',
+    trailingLink.body?.items[0].supersetWithNext === false,
+    trailingLink.body?.items,
+  );
 
   /* ------------------------------------------------------ deleting things */
 

@@ -61,6 +61,9 @@ export interface EquipmentInput {
   kind: Equipment['kind'];
   usesPlates: boolean;
   barWeightKg: number;
+  incrementKg: number;
+  minWeightKg: number;
+  maxWeightKg: number;
   notes: string;
 }
 
@@ -79,6 +82,7 @@ export interface RegimenInput {
     repsMin: number;
     repsMax: number;
     restSeconds: number;
+    supersetWithNext: boolean;
     notes: string;
   }>;
 }

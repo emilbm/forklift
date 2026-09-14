@@ -6,6 +6,8 @@ export default defineConfig({
   server: {
     host: true, // reachable from a phone on the LAN during development
     proxy: { '/api': 'http://localhost:8080' },
+    // shared/ holds runtime code as well as types, and sits outside this root.
+    fs: { allow: ['..'] },
   },
   build: { outDir: 'dist', emptyOutDir: true },
 });

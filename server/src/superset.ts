@@ -91,6 +91,16 @@ function platesCannotCoexist(
   };
 }
 
+/**
+ * Equipment shared between two exercises. A superset needing the same physical
+ * item is impossible rather than merely awkward, so this is what gets enforced
+ * when a regimen is saved — the plate check stays advisory, since it depends on
+ * weights that change from session to session.
+ */
+export function sharedEquipment(a: Exercise, b: Exercise): number[] {
+  return a.equipmentIds.filter((id) => b.equipmentIds.includes(id));
+}
+
 /** Every pair of the given exercises, annotated with whether it can be supersetted. */
 export function supersetMatrix(
   exercises: SupersetInput[],

@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { achievableWeights, planLoads, type PlateStock } from './plates.js';
 import { equipment, exercises, plates, regimens, sessions } from './store.js';
-import { supersetMatrix, type SupersetInput } from './superset.js';
+import { sharedEquipment, supersetMatrix, type SupersetInput } from './superset.js';
+import { supersetGroups } from '../../shared/plan.js';
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -13,6 +14,10 @@ const equipmentBody = z.object({
     .default('other'),
   usesPlates: z.boolean().default(false),
   barWeightKg: z.number().min(0).max(200).default(0),
+  // A fixed ladder, for anything not loaded with plates: 0 means no ladder.
+  incrementKg: z.number().min(0).max(100).default(0),
+  minWeightKg: z.number().min(0).max(1000).default(0),
+  maxWeightKg: z.number().min(0).max(1000).default(0),
   notes: z.string().max(500).default(''),
 });
 
@@ -47,6 +52,7 @@ const regimenBody = z.object({
         repsMin: z.number().int().min(1).max(100).default(8),
         repsMax: z.number().int().min(1).max(100).default(12),
         restSeconds: z.number().int().min(0).max(600).default(90),
+        supersetWithNext: z.boolean().default(false),
         notes: z.string().max(300).default(''),
       }),
     )
@@ -77,6 +83,36 @@ function clientErrorStatus(err: unknown): number | null {
   if (typeof err !== 'object' || err === null || !('statusCode' in err)) return null;
   const status = (err as { statusCode: unknown }).statusCode;
   return typeof status === 'number' && status >= 400 && status < 500 ? status : null;
+}
+
+/**
+ * Supersets are alternated set for set, so two exercises needing the same
+ * physical item can't be one — you'd be queueing for your own bench. Rejected
+ * outright when a regimen is saved. The plate check is deliberately not enforced
+ * here: it depends on the weights of the day, so it stays advice.
+ */
+function supersetEquipmentClash(items: Array<{ exerciseId: number; supersetWithNext: boolean }>):
+  | string
+  | null {
+  const byId = new Map(exercises.list().map((e) => [e.id, e]));
+  const named = (id: number) => byId.get(id)?.name ?? `exercise #${id}`;
+  const equipmentName = new Map(equipment.list().map((e) => [e.id, e.name]));
+
+  for (const group of supersetGroups(items)) {
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = byId.get(group[i]!.exerciseId);
+        const b = byId.get(group[j]!.exerciseId);
+        if (!a || !b) continue;
+        const shared = sharedEquipment(a, b);
+        if (shared.length > 0) {
+          const names = shared.map((id) => equipmentName.get(id) ?? `#${id}`).join(', ');
+          return `${named(a.id)} and ${named(b.id)} can't be supersetted — both need ${names}.`;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -196,16 +232,27 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       : reply.status(404).send({ error: 'Equipment not found' });
   });
 
-  /** Every weight this equipment can actually be loaded to with the plates owned. */
+  /**
+   * Every weight this equipment can be set to: worked out from the plates for a
+   * loaded bar, or read off the fixed ladder for a dumbbell rack or a stack.
+   */
   app.get('/api/equipment/:id/loads', async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const item = equipment.get(id);
     if (!item) return reply.status(404).send({ error: 'Equipment not found' });
-    return {
-      equipmentId: item.id,
-      barWeightKg: item.barWeightKg,
-      weights: item.usesPlates ? achievableWeights(item.barWeightKg, currentStock()) : [],
-    };
+
+    let weights: number[] = [];
+    if (item.usesPlates) {
+      weights = achievableWeights(item.barWeightKg, currentStock());
+    } else if (item.incrementKg > 0 && item.maxWeightKg >= item.minWeightKg) {
+      // Counted in hundredths to keep a 2.5 kg increment from drifting.
+      const step = Math.round(item.incrementKg * 100);
+      const start = Math.round(item.minWeightKg * 100);
+      const end = Math.round(item.maxWeightKg * 100);
+      for (let w = start; w <= end; w += step) weights.push(w / 100);
+    }
+
+    return { equipmentId: item.id, barWeightKg: item.barWeightKg, weights };
   });
 
   /* ----------------------------------------------------------- exercises */
@@ -249,12 +296,18 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/regimens', async (req, reply) => {
-    return reply.status(201).send(regimens.create(regimenBody.parse(req.body)));
+    const input = regimenBody.parse(req.body);
+    const clash = supersetEquipmentClash(input.items);
+    if (clash) return reply.status(400).send({ error: clash });
+    return reply.status(201).send(regimens.create(input));
   });
 
   app.put('/api/regimens/:id', async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const updated = regimens.update(id, regimenBody.parse(req.body));
+    const input = regimenBody.parse(req.body);
+    const clash = supersetEquipmentClash(input.items);
+    if (clash) return reply.status(400).send({ error: clash });
+    const updated = regimens.update(id, input);
     return updated ?? reply.status(404).send({ error: 'Regimen not found' });
   });
 

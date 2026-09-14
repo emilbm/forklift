@@ -10,14 +10,17 @@ keeps counting while the screen is off.
 
 - **Plates** — the plates you actually own, counted individually. One collection,
   shared by every bar.
-- **Equipment** — record what the gym has, including what each bar weighs empty.
+- **Equipment** — record what the gym has: what each bar weighs empty, or the
+  fixed weights a dumbbell rack or stack offers (2–32 kg in 2 kg steps, say).
 - **Exercises** — each one lists the equipment it needs.
 - **Regimens** — the workouts you cycle through (A, B, C…), each an ordered list
-  of exercises with sets, a rep target and a rest length.
-- **Workout mode** — walks through a regimen, one exercise at a time. Tap the
-  reps you managed, adjust the weight, and the rest timer starts itself. The
-  weight steps between loads your plates can actually make, and shows what to
-  hang on the bar.
+  of exercises with sets, a rep target and a rest length. Consecutive exercises
+  can be linked into a superset.
+- **Workout mode** — walks through a regimen in the order you actually lift it,
+  alternating the halves of a superset. Tap the reps you managed, adjust the
+  weight, and the rest timer starts itself. The weight steps between loads that
+  really exist — what your plates can make, or the rungs of the rack — and shows
+  what to hang on the bar.
 - **History** — every session, set by set, with volume and duration.
 
 ### Plates, and why supersets need them
@@ -39,7 +42,21 @@ Open a saved regimen and expand **Superset options** to see which pairs are
 possible, at which weights, and why the rest are not.
 
 Plates are loaded in pairs, so two 20 kg plates make one usable pair. Equipment
-that loads asymmetrically (a landmine, say) isn't modelled.
+that loads asymmetrically (a landmine, say) isn't modelled. Dumbbell weights are
+recorded per dumbbell, which is how people talk about them, so the volume figure
+in history counts one hand for a two-dumbbell lift.
+
+### Supersets
+
+Link two consecutive exercises in the regimen editor and they are worked in
+rounds: A set 1, B set 1, A set 2, B set 2. No rest between the halves of a
+round — going straight from one to the other is the point — only once the round
+is done. Uneven set counts are fine; the shorter exercise drops out of the last
+rounds.
+
+Exercises that need the same physical item can't be linked at all: the editor
+says which item they clash on, and the API refuses to save it. The plate check
+is separate and stays advisory, since it depends on the weights of the day.
 
 ## Running it
 
@@ -141,6 +158,7 @@ the same network.
 shared/types.ts     types used by both sides
 server/src/db.ts    schema and migrations (node:sqlite, no native module)
 server/src/store.ts all queries
+shared/plan.ts      the order sets are performed in, supersets included
 server/src/plates.ts    plate arithmetic: what can be loaded, and what can be loaded at once
 server/src/superset.ts  the superset rules, built on that
 server/src/routes.ts    the HTTP API
@@ -159,7 +177,7 @@ running instance upgrades its own volume on restart.
 | `POST` | `/api/loads/plan` | how to load one bar, or whether several can be loaded at once |
 | `GET/POST` | `/api/equipment` | |
 | `PUT/DELETE` | `/api/equipment/:id` | |
-| `GET` | `/api/equipment/:id/loads` | every weight this bar can be loaded to |
+| `GET` | `/api/equipment/:id/loads` | every weight this equipment can be set to |
 | `GET/POST` | `/api/exercises` | |
 | `PUT/DELETE` | `/api/exercises/:id` | |
 | `GET` | `/api/exercises/:id/last-performance` | prefills the weight in workout mode |
@@ -179,8 +197,9 @@ running instance upgrades its own volume on restart.
 npm test
 ```
 
-Runs the plate arithmetic against known loadings, then boots the API on a
-throwaway database and exercises the whole flow, including the superset rules.
+Runs the plate arithmetic against known loadings and the superset ordering
+against known regimens, then boots the API on a throwaway database and exercises
+the whole flow.
 CI runs this plus `npm run typecheck` and a client build before any image is
 published, so `latest` is always a build that passed.
 

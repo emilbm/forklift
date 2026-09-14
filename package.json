@@ -14,7 +14,7 @@
     "build": "npm run build -w client && npm run build -w server",
     "start": "node server/dist/server/src/index.js",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
-    "test": "npm run build -w server && node test/plates.test.mjs && node test/api.test.mjs"
+    "test": "npm run build -w server && node test/plates.test.mjs && node test/plan.test.mjs && node test/api.test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
