@@ -1,0 +1,137 @@
+# Forklift
+
+A lifting tracker for a home gym. One container: a mobile-first web app plus a
+JSON API, with its own SQLite database on a mounted volume.
+
+Built to be used mid-set — phone in one hand, big buttons, a rest timer that
+keeps counting while the screen is off.
+
+## What it does
+
+- **Equipment** — record what the gym has. Equipment that draws from the same
+  set of plates shares a *plate pool*, which is what makes supersets decidable.
+- **Exercises** — each one lists the equipment it needs.
+- **Regimens** — the workouts you cycle through (A, B, C…), each an ordered list
+  of exercises with sets, a rep target and a rest length.
+- **Workout mode** — walks through a regimen, one exercise at a time. Tap the
+  reps you managed, adjust the weight, and the rest timer starts itself.
+- **History** — every session, set by set, with volume and duration.
+
+### Plate pools, and why supersets need them
+
+Two exercises can only be supersetted if you can go straight from one to the
+other without re-rigging anything. Forklift blocks a pair when:
+
+1. both exercises need the same physical item (one bench, two lifts), or
+2. their equipment draws plates from the same pool — a barbell and an ez-bar
+   sharing one set of plates can't both stay loaded, so you'd be stripping
+   plates between every set.
+
+Tag both bars with the same plate pool and Forklift works this out for you.
+Open a saved regimen and expand **Superset options** to see which pairs are
+possible and why the rest are not.
+
+## Running it
+
+### Development
+
+```bash
+npm install
+npm run dev
+```
+
+The API listens on `:8080`, Vite on `:5173` and proxies `/api` to it. Vite binds
+to all interfaces, so you can open the dev server from your phone on the same
+network to try the touch targets for real.
+
+Data goes to `./data/forklift.db` (gitignored).
+
+### On the homelab
+
+```bash
+docker compose up -d --build
+```
+
+Serves the app and API on port `8080` and keeps the database in the
+`forklift-data` volume.
+
+To point it at a host directory instead — easier to fold into an existing backup
+job — swap the volume for a bind mount:
+
+```yaml
+volumes:
+  - /srv/forklift:/data
+```
+
+### Exposure
+
+The app has **no authentication**, which is fine on the LAN. If you put a
+Cloudflare tunnel in front of it, protect it with Cloudflare Access so auth
+happens at the edge — nothing in the app needs to change, and it already trusts
+proxy headers for request logging.
+
+### Backup
+
+Everything is in `/data/forklift.db` (plus the WAL sidecar files). To take a
+consistent copy while it's running:
+
+```bash
+docker exec forklift node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('/data/forklift.db').exec(\"VACUUM INTO '/data/backup.db'\")"
+```
+
+## Install on your phone
+
+Open it in mobile Chrome or Safari and use *Add to Home Screen*. It runs
+full-screen with its own icon. It is not offline-capable — it talks to the
+server for every set — which is deliberate while the gym and the server are on
+the same network.
+
+## Layout
+
+```
+shared/types.ts     types used by both sides
+server/src/db.ts    schema and migrations (node:sqlite, no native module)
+server/src/store.ts all queries
+server/src/superset.ts  the plate-pool conflict rules
+server/src/routes.ts    the HTTP API
+client/src/pages/       one file per screen; WorkoutPage.tsx is the important one
+```
+
+Migrations are an append-only list in `db.ts`, tracked with `user_version`, so a
+running instance upgrades its own volume on restart.
+
+## API
+
+| Method | Path | |
+| --- | --- | --- |
+| `GET/POST` | `/api/plate-pools` | shared sets of plates |
+| `PUT/DELETE` | `/api/plate-pools/:id` | |
+| `GET/POST` | `/api/equipment` | |
+| `PUT/DELETE` | `/api/equipment/:id` | |
+| `GET/POST` | `/api/exercises` | |
+| `PUT/DELETE` | `/api/exercises/:id` | |
+| `GET` | `/api/exercises/:id/last-performance` | prefills the weight in workout mode |
+| `GET/POST` | `/api/regimens` | |
+| `GET/PUT/DELETE` | `/api/regimens/:id` | |
+| `GET` | `/api/regimens/:id/superset-pairs` | which pairs can be supersetted, and why not |
+| `GET/POST` | `/api/sessions` | history / start a workout |
+| `GET` | `/api/sessions/active` | the unfinished session, if any |
+| `GET/DELETE` | `/api/sessions/:id` | |
+| `POST` | `/api/sessions/:id/sets` | log a set |
+| `DELETE` | `/api/sessions/:id/sets/:setId` | undo a set |
+| `POST` | `/api/sessions/:id/finish` | |
+
+## Tests
+
+```bash
+npm test
+```
+
+Boots the API against a throwaway database and exercises the whole flow,
+including the plate-pool superset rules.
+
+## Not built yet
+
+AI-assisted weight and superset suggestions. The groundwork is in place: full
+set history per exercise, and `superset-pairs` already narrows any suggestion to
+pairs that are physically possible in this gym.

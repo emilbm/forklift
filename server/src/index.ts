@@ -26,7 +26,9 @@ await registerRoutes(app);
 
 const hasClientBuild = existsSync(join(CLIENT_DIR, 'index.html'));
 if (hasClientBuild) {
-  await app.register(fastifyStatic, { root: CLIENT_DIR, index: false });
+  // `index` must name the shell: without it a request for "/" resolves to a
+  // directory, which the static plugin refuses outright.
+  await app.register(fastifyStatic, { root: CLIENT_DIR, index: ['index.html'] });
 
   // Single-page app: anything that isn't an API route or a real file is a client route.
   app.setNotFoundHandler((req, reply) => {

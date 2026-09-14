@@ -1,0 +1,17 @@
+services:
+  forklift:
+    build: .
+    image: forklift:latest
+    container_name: forklift
+    restart: unless-stopped
+    ports:
+      # LAN only. Put a Cloudflare tunnel in front of this if you want it from
+      # outside the house — and use Cloudflare Access, the app has no auth.
+      - "8080:8080"
+    volumes:
+      - forklift-data:/data
+    environment:
+      TZ: Europe/Copenhagen
+
+volumes:
+  forklift-data:

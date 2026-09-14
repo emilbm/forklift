@@ -56,6 +56,13 @@ function sqliteErrorCode(err: unknown): number | null {
   return typeof code === 'number' ? code : null;
 }
 
+/** Status carried by an error a plugin already classified, if it is a client error. */
+function clientErrorStatus(err: unknown): number | null {
+  if (typeof err !== 'object' || err === null || !('statusCode' in err)) return null;
+  const status = (err as { statusCode: unknown }).statusCode;
+  return typeof status === 'number' && status >= 400 && status < 500 ? status : null;
+}
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof z.ZodError) {
@@ -69,6 +76,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .status(400)
         .send({ error: 'References something that no longer exists — try reloading' });
+    }
+    // Errors raised by plugins already carry a meaningful status; keep it rather
+    // than reporting someone else's 4xx as a server fault.
+    const clientStatus = clientErrorStatus(err);
+    if (clientStatus !== null) {
+      return reply
+        .status(clientStatus)
+        .send({ error: err instanceof Error ? err.message : 'Request rejected' });
     }
     app.log.error(err);
     return reply.status(500).send({ error: 'Internal server error' });
