@@ -18,7 +18,8 @@ keeps counting while the screen is off.
   of exercises with sets, a rep target and a rest length. Consecutive exercises
   can be linked into a superset.
 - **Workout mode** — walks through a regimen in the order you actually lift it,
-  alternating the halves of a superset. Tap the reps you managed, adjust the
+  alternating the halves of a superset, and prefills each weight from the last
+  time you did that lift — saying how long ago that was. Tap the reps you managed, adjust the
   weight, and the rest timer starts itself and rings a bell when it's up. The
   weight steps between loads that really exist — what your plates can make, or
   the rungs of the rack — and shows what to hang on the bar. Any exercise can be
@@ -62,6 +63,10 @@ rounds.
 Rest comes after every round. The only set that never earns one is the first
 half of a superset — going straight to the partner is the point — and the very
 last set of the workout, when there is nothing left to rest for.
+
+Logging a set moves straight to whatever comes next, and once you are inside a
+group you stay there until it is finished, even if you jumped to it out of
+order. Only when the group runs out does the plan take over again.
 
 Exercises that need the same physical item can't be linked, unless that item is
 marked **shareable**: a bench takes a second to re-angle, so two lifts can share

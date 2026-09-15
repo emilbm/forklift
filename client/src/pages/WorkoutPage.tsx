@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Equipment, RegimenItem, SetLog } from '../../../shared/types';
 import { currentStepIndex, planWorkout } from '../../../shared/plan';
+import { formatAgo } from '../../../shared/time';
 import { api } from '../api';
 import { primeAudio } from '../audio';
 import { RestTimer, type RestState } from '../components/RestTimer';
@@ -105,9 +106,14 @@ export default function WorkoutPage() {
   const done = setsByItem.get(item?.id ?? -1) ?? [];
   const allDone = steps.length > 0 && outstanding === -1;
 
-  /** The other exercises in this superset, in the order they come round. */
-  const partners = (step?.group ?? []).filter((other) => other.id !== item?.id);
   const upNext = steps[index + 1];
+
+  /**
+   * The next step of the same round — the exercise to walk straight over to.
+   * Absent on the last step of a round, which is where the rest belongs.
+   */
+  const sameRoundNext =
+    step && upNext && upNext.group === step.group && upNext.round === step.round ? upNext : null;
 
   const lastTime = useLastPerformance(item?.exerciseId ?? null, sessionId);
 
@@ -117,10 +123,16 @@ export default function WorkoutPage() {
    */
   const suggestedWeight = useMemo(() => {
     if (!item) return null;
-    const inSession = done.at(-1)?.weightKg;
-    if (inSession !== undefined && inSession !== null) return inSession;
-    const previous = lastTime.data?.sets.at(-1)?.weightKg;
-    return previous ?? null;
+    // The most recent weight that was actually recorded — a set logged without
+    // one shouldn't wipe out the suggestion.
+    const lastRecorded = (sets: Array<{ weightKg: number | null }>): number | null => {
+      for (let i = sets.length - 1; i >= 0; i--) {
+        const weightKg = sets[i]?.weightKg;
+        if (weightKg !== null && weightKg !== undefined) return weightKg;
+      }
+      return null;
+    };
+    return lastRecorded(done) ?? lastRecorded(lastTime.data?.sets ?? []);
   }, [item, done, lastTime.data]);
 
   const weight = item && item.id in weights ? weights[item.id]! : suggestedWeight;
@@ -195,6 +207,24 @@ export default function WorkoutPage() {
         weightKg: weight,
       });
       invalidateSessions(qc, sessionId);
+
+      // Move on straight away rather than waiting for the refetch to say so —
+      // in a superset the jump to the partner is the whole interaction, and a
+      // round trip of hesitation reads as the link not working.
+      //
+      // Stay inside the current group until it is finished: the steps of a
+      // group are contiguous, so the next one is simply index + 1. Only once
+      // the group runs out does the plan take over again — otherwise jumping
+      // ahead to a superset would bounce you back to the first unfinished
+      // exercise after a single set, mid-pair.
+      const next = steps[index + 1];
+      if (step && next && next.group === step.group) {
+        setFollowProgress(false);
+        setIndex(index + 1);
+      } else {
+        setFollowProgress(true);
+      }
+
       // The plan decides the rest: none between the halves of a superset, none
       // after the final round, otherwise the length the regimen prescribes.
       const seconds = step?.restSeconds ?? 0;
@@ -373,18 +403,30 @@ export default function WorkoutPage() {
                 </button>
               </div>
 
-              {partners.length > 0 && (
+              {step && step.group.length > 1 && (
                 <div className="superset-note">
-                  ⇄ Superset with {partners.map((p) => exerciseName.get(p.exerciseId) ?? '?').join(' and ')}
-                  {step?.restSeconds === 0 && upNext && upNext.group === step.group
-                    ? ' — go straight there, no rest'
-                    : ''}
+                  <span>
+                    ⇄ Superset — {step.group.indexOf(item) + 1} of {step.group.length}
+                  </span>
+                  <span className="superset-note__next">
+                    {sameRoundNext
+                      ? `No rest — straight on to ${
+                          exerciseName.get(sameRoundNext.item.exerciseId) ?? 'the next lift'
+                        }`
+                      : `Rest after this, then back to ${
+                          exerciseName.get(step.group[0]!.exerciseId) ?? 'the first lift'
+                        }`}
+                  </span>
                 </div>
               )}
 
               {lastTime.data && (
                 <p className="tiny faint" style={{ margin: '8px 0 0' }}>
-                  Last time:{' '}
+                  Last time
+                  {lastTime.data.performedAt && (
+                    <span className="lasttime__when"> {formatAgo(lastTime.data.performedAt)}</span>
+                  )}
+                  :{' '}
                   {lastTime.data.sets.some((s) => s.weightKg !== null)
                     ? `${lastTime.data.sets
                         .map((s) => `${s.reps}×${formatWeight(s.weightKg)}`)
