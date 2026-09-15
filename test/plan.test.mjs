@@ -69,9 +69,19 @@ const trace = (steps) =>
 {
   const steps = planWorkout([item('A', 3), item('B', 2)]);
   check(
-    'runs ordinary exercises straight through',
-    trace(steps) === 'A1* A2* A3 B1* B2',
+    'runs ordinary exercises straight through, resting after every set',
+    trace(steps) === 'A1* A2* A3* B1* B2',
     trace(steps),
+  );
+  check(
+    'rests when moving on to the next exercise',
+    steps[2].restSeconds === 90,
+    steps[2].restSeconds,
+  );
+  check(
+    'takes no rest after the very last set of the workout',
+    steps.at(-1).restSeconds === 0,
+    steps.at(-1).restSeconds,
   );
 }
 
@@ -93,9 +103,19 @@ const trace = (steps) =>
     steps.map((s) => s.restSeconds),
   );
   check(
-    'takes no rest after the final round',
+    'takes no rest after the very last set',
     steps.at(-1).restSeconds === 0,
     steps.at(-1).restSeconds,
+  );
+}
+
+{
+  // A superset followed by something else still rests before moving on.
+  const steps = planWorkout([item('A', 2, true), item('B', 2), item('C', 1)]);
+  check(
+    'rests between a finished superset and the next exercise',
+    trace(steps) === 'A1 B1* A2 B2* C1',
+    trace(steps),
   );
 }
 
@@ -128,6 +148,35 @@ const trace = (steps) =>
 {
   const steps = planWorkout([]);
   check('handles an empty regimen', steps.length === 0, steps.length);
+}
+
+/* --------------------------------------------------------------- skipping */
+
+{
+  const a = item('A', 3);
+  const b = item('B', 3);
+  const steps = planWorkout([a, b], { skippedItemIds: new Set([a.id]) });
+  check('leaves a skipped exercise out of the plan', trace(steps) === 'B1* B2* B3', trace(steps));
+}
+
+{
+  // Skipping half a superset leaves the other half as an ordinary exercise.
+  const a = item('A', 2, true);
+  const b = item('B', 2);
+  const steps = planWorkout([a, b], { skippedItemIds: new Set([a.id]) });
+  check(
+    'unpairs a superset when one half is skipped',
+    trace(steps) === 'B1* B2',
+    trace(steps),
+  );
+  check('and the survivor rests normally', steps[0].restSeconds === 90, steps[0].restSeconds);
+}
+
+{
+  const a = item('A', 2);
+  const b = item('B', 2);
+  const steps = planWorkout([a, b], { skippedItemIds: new Set([a.id, b.id]) });
+  check('skipping everything leaves nothing to do', steps.length === 0, steps.length);
 }
 
 /* -------------------------------------------------------------- progress */

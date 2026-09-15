@@ -199,6 +199,32 @@ const MIGRATIONS: string[] = [
 
   ALTER TABLE regimen_items ADD COLUMN superset_with_next INTEGER NOT NULL DEFAULT 0;
   `,
+
+  // 4 — equipment that can be shared mid-superset, and skipping an exercise.
+  //
+  // Needing the same item doesn't always rule out a superset: a bench takes a
+  // second to re-angle, so sharing one is fine. Only equipment that has to be
+  // re-rigged — a loaded bar — actually blocks the pair.
+  //
+  // Skips are recorded per session rather than as a flag on the regimen: the
+  // regimen is what you intend to do, a session is what happened.
+  `
+  ALTER TABLE equipment ADD COLUMN superset_friendly INTEGER NOT NULL DEFAULT 0;
+
+  -- Benches and racks are the usual "just adjust it" case.
+  UPDATE equipment SET superset_friendly = 1 WHERE kind IN ('bench', 'rack');
+
+  CREATE TABLE session_skips (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    regimen_item_id INTEGER NOT NULL,
+    exercise_id     INTEGER NOT NULL,
+    reason          TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    UNIQUE (session_id, regimen_item_id)
+  );
+  CREATE INDEX idx_session_skips_session ON session_skips(session_id);
+  `,
 ];
 
 export function migrate(): void {

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { Equipment } from '../../../shared/types';
 import type { EquipmentInput } from '../api';
 import {
+  DecimalInput,
   EmptyState,
   ErrorBanner,
   IconPlus,
@@ -24,6 +25,7 @@ const blank = (): EquipmentInput => ({
   incrementKg: 0,
   minWeightKg: 0,
   maxWeightKg: 0,
+  supersetFriendly: false,
   notes: '',
 });
 
@@ -120,6 +122,7 @@ export default function EquipmentPage() {
                           </span>
                         )}
                       </span>
+                      {item.supersetFriendly && <span className="chip">⇄ shareable</span>}
                       {item.usesPlates ? (
                         <span className="chip chip--accent num">
                           {formatWeight(item.barWeightKg)} kg bar
@@ -168,6 +171,7 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
           incrementKg: initial.incrementKg,
           minWeightKg: initial.minWeightKg,
           maxWeightKg: initial.maxWeightKg,
+          supersetFriendly: initial.supersetFriendly,
           notes: initial.notes,
         }
       : blank(),
@@ -269,47 +273,52 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
             <span className="grow">Loaded with plates</span>
           </label>
 
+          <label className={`checkline${form.supersetFriendly ? ' checkline--on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={form.supersetFriendly}
+              onChange={(e) => setForm({ ...form, supersetFriendly: e.target.checked })}
+            />
+            <span className="grow">
+              Can be shared in a superset
+              <span className="tiny faint" style={{ display: 'block', fontWeight: 400 }}>
+                Quick enough to hand over between sets — a bench you just re-angle.
+              </span>
+            </span>
+          </label>
+
           {!form.usesPlates && (
             <div className="field">
               <label>Fixed weights available</label>
               <div className="row" style={{ gap: 8, alignItems: 'flex-end' }}>
                 <div className="field grow">
                   <label htmlFor="eq-min">From</label>
-                  <input
+                  <DecimalInput
                     id="eq-min"
                     className="input input--num"
-                    type="number"
-                    inputMode="decimal"
-                    step={0.5}
                     min={0}
                     value={form.minWeightKg}
-                    onChange={(e) => setForm({ ...form, minWeightKg: Number(e.target.value) || 0 })}
+                    onChange={(next) => setForm({ ...form, minWeightKg: next ?? 0 })}
                   />
                 </div>
                 <div className="field grow">
                   <label htmlFor="eq-max">To</label>
-                  <input
+                  <DecimalInput
                     id="eq-max"
                     className="input input--num"
-                    type="number"
-                    inputMode="decimal"
-                    step={0.5}
                     min={0}
                     value={form.maxWeightKg}
-                    onChange={(e) => setForm({ ...form, maxWeightKg: Number(e.target.value) || 0 })}
+                    onChange={(next) => setForm({ ...form, maxWeightKg: next ?? 0 })}
                   />
                 </div>
                 <div className="field grow">
                   <label htmlFor="eq-step">In steps of</label>
-                  <input
+                  <DecimalInput
                     id="eq-step"
                     className="input input--num"
-                    type="number"
-                    inputMode="decimal"
-                    step={0.5}
                     min={0}
                     value={form.incrementKg}
-                    onChange={(e) => setForm({ ...form, incrementKg: Number(e.target.value) || 0 })}
+                    onChange={(next) => setForm({ ...form, incrementKg: next ?? 0 })}
                   />
                 </div>
               </div>
@@ -324,20 +333,12 @@ function EquipmentSheet({ initial, onClose }: { initial: Equipment | null; onClo
           {form.usesPlates && (
             <div className="field">
               <label htmlFor="eq-bar">Bar weight (kg)</label>
-              <input
+              <DecimalInput
                 id="eq-bar"
                 className="input input--num"
-                type="number"
-                inputMode="decimal"
-                step={0.25}
                 min={0}
                 value={form.barWeightKg}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    barWeightKg: e.target.value === '' ? 0 : Number(e.target.value),
-                  })
-                }
+                onChange={(next) => setForm({ ...form, barWeightKg: next ?? 0 })}
               />
               <p className="tiny faint" style={{ margin: 0 }}>
                 What it weighs empty — 20 kg for a typical barbell, 8.5 kg for many ez-bars. Plates
@@ -377,7 +378,7 @@ function PlatesSheet({ onClose }: { onClose: () => void }) {
   const { create, update, remove } = usePlateMutations();
   const { confirm, dialog } = useConfirm();
   const [error, setError] = useState<unknown>(null);
-  const [customWeight, setCustomWeight] = useState('');
+  const [customWeight, setCustomWeight] = useState<number | null>(null);
 
   const owned = plates.data ?? [];
   const ownedWeights = new Set(owned.map((plate) => plate.weightKg));
@@ -401,10 +402,9 @@ function PlatesSheet({ onClose }: { onClose: () => void }) {
   }
 
   async function addCustom() {
-    const weightKg = Number(customWeight);
-    if (!Number.isFinite(weightKg) || weightKg <= 0) return;
-    await add(weightKg);
-    setCustomWeight('');
+    if (customWeight === null || customWeight <= 0) return;
+    await add(customWeight);
+    setCustomWeight(null);
   }
 
   return (
@@ -480,18 +480,18 @@ function PlatesSheet({ onClose }: { onClose: () => void }) {
           </div>
 
           <div className="row" style={{ gap: 8 }}>
-            <input
+            <DecimalInput
               className="input grow input--num"
-              type="number"
-              inputMode="decimal"
-              step={0.25}
               min={0.25}
               placeholder="Other size"
               value={customWeight}
-              onChange={(e) => setCustomWeight(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void addCustom()}
+              onChange={setCustomWeight}
             />
-            <button className="btn btn--primary" onClick={addCustom} disabled={!customWeight}>
+            <button
+              className="btn btn--primary"
+              onClick={addCustom}
+              disabled={customWeight === null || customWeight <= 0}
+            >
               Add
             </button>
           </div>

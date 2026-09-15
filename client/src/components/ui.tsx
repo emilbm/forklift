@@ -173,6 +173,71 @@ export function EmptyState({ title, hint, action }: EmptyStateProps) {
   );
 }
 
+/* ------------------------------------------------------- decimal input */
+
+/** Reads "2,5" as well as "2.5". Returns null for anything that isn't a number. */
+export function parseDecimal(text: string): number | null {
+  const normalised = text.replace(',', '.').trim();
+  if (normalised === '') return null;
+  const value = Number(normalised);
+  return Number.isFinite(value) ? value : null;
+}
+
+interface DecimalInputProps {
+  value: number | null;
+  onChange: (value: number | null) => void;
+  id?: string;
+  className?: string;
+  placeholder?: string;
+  min?: number;
+  'aria-label'?: string;
+}
+
+/**
+ * A number field that accepts a comma.
+ *
+ * `<input type="number">` silently rejects "2,5", and a Danish iPhone's number
+ * pad offers a comma and no full stop — so the decimal separator was simply
+ * unreachable. A text input with `inputMode="decimal"` gets the same keypad and
+ * lets us do the parsing ourselves.
+ *
+ * The typed text is kept as typed while the field has focus, so "2," survives
+ * long enough to become "2,5".
+ */
+export function DecimalInput({ value, onChange, className, ...rest }: DecimalInputProps) {
+  const [text, setText] = useState(() => (value === null ? '' : String(value)));
+  const [editing, setEditing] = useState(false);
+
+  // Follow the value when something else changes it, but never mid-keystroke.
+  useEffect(() => {
+    if (!editing) setText(value === null ? '' : String(value));
+  }, [value, editing]);
+
+  return (
+    <input
+      {...rest}
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      className={className}
+      value={text}
+      onFocus={() => setEditing(true)}
+      onBlur={() => {
+        setEditing(false);
+        // Settle the display on the parsed value: "2," becomes "2".
+        setText(value === null ? '' : String(value));
+      }}
+      onChange={(e) => {
+        const next = e.target.value;
+        // Digits, one separator, optional leading minus is not useful for weights.
+        if (!/^[0-9]*[.,]?[0-9]*$/.test(next)) return;
+        setText(next);
+        onChange(parseDecimal(next));
+      }}
+    />
+  );
+}
+
 /* ----------------------------------------------------------- confirming */
 
 export interface ConfirmRequest {

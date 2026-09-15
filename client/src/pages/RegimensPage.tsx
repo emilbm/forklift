@@ -113,10 +113,17 @@ export default function RegimensPage() {
                   className="small muted"
                   style={{ margin: '10px 0 0', paddingLeft: 20, lineHeight: 1.7 }}
                 >
-                  {regimen.items.map((item) => (
+                  {regimen.items.map((item, index) => (
                     <li key={item.id}>
                       {exerciseName.get(item.exerciseId) ?? 'Unknown exercise'}{' '}
                       <span className="faint num">{formatPrescription(item)}</span>
+                      {/* Say it plainly in the list, so a superset is visible
+                          without opening the editor. */}
+                      {item.supersetWithNext && index < regimen.items.length - 1 && (
+                        <span className="chip chip--accent" style={{ marginLeft: 6 }}>
+                          ⇄ superset with next
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ol>

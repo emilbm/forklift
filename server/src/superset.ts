@@ -30,7 +30,7 @@ export function supersetPair(
 ): SupersetPair {
   const conflicts: SupersetConflict[] = [];
 
-  for (const id of a.exercise.equipmentIds.filter((id) => b.exercise.equipmentIds.includes(id))) {
+  for (const id of sharedEquipment(a.exercise, b.exercise, equipmentById)) {
     conflicts.push({
       reason: 'equipment',
       equipmentIds: [id],
@@ -92,13 +92,24 @@ function platesCannotCoexist(
 }
 
 /**
- * Equipment shared between two exercises. A superset needing the same physical
- * item is impossible rather than merely awkward, so this is what gets enforced
- * when a regimen is saved — the plate check stays advisory, since it depends on
- * weights that change from session to session.
+ * Equipment shared between two exercises that would actually block a superset.
+ *
+ * Sharing an item is only a problem when it can't be handed over quickly. A
+ * bench takes a second to re-angle, so it is marked superset-friendly and drops
+ * out of this check; a loaded bar is not, because it would have to be stripped
+ * and re-loaded between every set.
+ *
+ * This is what gets enforced when a regimen is saved — the plate check stays
+ * advisory, since it depends on weights that change from session to session.
  */
-export function sharedEquipment(a: Exercise, b: Exercise): number[] {
-  return a.equipmentIds.filter((id) => b.equipmentIds.includes(id));
+export function sharedEquipment(
+  a: Exercise,
+  b: Exercise,
+  equipmentById?: Map<number, Equipment>,
+): number[] {
+  return a.equipmentIds
+    .filter((id) => b.equipmentIds.includes(id))
+    .filter((id) => !equipmentById?.get(id)?.supersetFriendly);
 }
 
 /** Every pair of the given exercises, annotated with whether it can be supersetted. */

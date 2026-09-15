@@ -21,6 +21,12 @@ FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# Stamped by CI so a running instance can say which build it is.
+ARG FORKLIFT_VERSION=dev
+ARG FORKLIFT_BUILT_AT=
+ENV FORKLIFT_VERSION=$FORKLIFT_VERSION
+ENV FORKLIFT_BUILT_AT=$FORKLIFT_BUILT_AT
+
 COPY package.json package-lock.json ./
 COPY server/package.json server/
 COPY client/package.json client/

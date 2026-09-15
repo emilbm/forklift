@@ -39,6 +39,19 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/*
+ * Taps on iOS can be swallowed: the browser waits to see whether a tap is the
+ * start of a double-tap zoom, and a few pixels of finger movement turn the tap
+ * into a cancelled scroll. `manipulation` opts out of both.
+ */
+button,
+a,
+label,
+input,
+select {
+  touch-action: manipulation;
+}
+
 html,
 body {
   margin: 0;
@@ -601,25 +614,37 @@ textarea {
   font-weight: 600;
 }
 
+/*
+ * Four across, not five. At five the buttons were 56px wide with 8px between
+ * them, and a tap that landed in a gap did nothing at all — which reads as the
+ * button being broken. Fewer, wider targets and a tighter gap fix that.
+ */
 .reppad {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
 }
 
 .reppad__btn {
-  min-height: 56px;
+  min-height: 64px;
   border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
+  /* Visible confirmation that the tap landed. */
+  transition: background-color 0.08s ease, transform 0.06s ease;
 }
 
 .reppad__btn:active {
-  transform: scale(0.95);
+  transform: scale(0.96);
+  background: var(--surface-3);
+}
+
+.reppad__btn--target:active {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-3));
 }
 
 .reppad__btn--target {
@@ -789,6 +814,12 @@ textarea {
 
 /* ------------------------------------------------------------------ desktop */
 
+@media (min-width: 420px) {
+  .reppad {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
 @media (min-width: 720px) {
   .main {
     padding-bottom: calc(var(--nav-h) + 40px);
@@ -833,4 +864,12 @@ textarea {
   color: #ffb774;
   font-size: 0.8rem;
   font-weight: 600;
+}
+
+/* A skipped exercise stays in the strip so it can be put back. */
+.exnav__item--skipped {
+  border-style: dashed;
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
 }

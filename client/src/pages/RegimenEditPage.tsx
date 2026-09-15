@@ -81,8 +81,8 @@ export default function RegimenEditPage() {
     [exercises.data],
   );
 
-  const equipmentName = useMemo(
-    () => new Map((equipment.data ?? []).map((e) => [e.id, e.name])),
+  const equipmentById = useMemo(
+    () => new Map((equipment.data ?? []).map((e) => [e.id, e])),
     [equipment.data],
   );
 
@@ -90,18 +90,20 @@ export default function RegimenEditPage() {
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...changes } : item)));
 
   /**
-   * Equipment both exercises need. A superset alternates set for set, so sharing
-   * a bench or a bar makes it impossible rather than merely awkward — the server
-   * rejects it too, this just says so before you save.
+   * Equipment both exercises need that can't be handed over quickly. Equipment
+   * marked shareable — a bench you just re-angle — doesn't stop a superset, so
+   * it is excluded here exactly as the server excludes it.
    */
   const clashBetween = (first: Draft | undefined, second: Draft | undefined): string | null => {
     if (!first || !second) return null;
     const a = exerciseById.get(first.exerciseId);
     const b = exerciseById.get(second.exerciseId);
     if (!a || !b) return null;
-    const shared = a.equipmentIds.filter((id) => b.equipmentIds.includes(id));
+    const shared = a.equipmentIds
+      .filter((id) => b.equipmentIds.includes(id))
+      .filter((id) => !equipmentById.get(id)?.supersetFriendly);
     if (shared.length === 0) return null;
-    return `Both need ${shared.map((id) => equipmentName.get(id) ?? 'the same equipment').join(', ')}.`;
+    return `Both need ${shared.map((id) => equipmentById.get(id)?.name ?? 'the same equipment').join(', ')}.`;
   };
 
   const toggleSuperset = (index: number) => {

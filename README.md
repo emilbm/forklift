@@ -11,16 +11,18 @@ keeps counting while the screen is off.
 - **Plates** — the plates you actually own, counted individually. One collection,
   shared by every bar.
 - **Equipment** — record what the gym has: what each bar weighs empty, or the
-  fixed weights a dumbbell rack or stack offers (2–32 kg in 2 kg steps, say).
+  fixed weights a dumbbell rack or stack offers (2–32 kg in 2 kg steps, say),
+  and whether it can be shared mid-superset.
 - **Exercises** — each one lists the equipment it needs.
 - **Regimens** — the workouts you cycle through (A, B, C…), each an ordered list
   of exercises with sets, a rep target and a rest length. Consecutive exercises
   can be linked into a superset.
 - **Workout mode** — walks through a regimen in the order you actually lift it,
   alternating the halves of a superset. Tap the reps you managed, adjust the
-  weight, and the rest timer starts itself. The weight steps between loads that
-  really exist — what your plates can make, or the rungs of the rack — and shows
-  what to hang on the bar.
+  weight, and the rest timer starts itself and rings a bell when it's up. The
+  weight steps between loads that really exist — what your plates can make, or
+  the rungs of the rack — and shows what to hang on the bar. Any exercise can be
+  skipped for the day, with a reason kept against the session.
 - **History** — every session, set by set, with volume and duration.
 
 ### Plates, and why supersets need them
@@ -46,6 +48,9 @@ that loads asymmetrically (a landmine, say) isn't modelled. Dumbbell weights are
 recorded per dumbbell, which is how people talk about them, so the volume figure
 in history counts one hand for a two-dumbbell lift.
 
+Weight fields take a comma or a full stop, because a Danish iPhone's number pad
+offers only a comma.
+
 ### Supersets
 
 Link two consecutive exercises in the regimen editor and they are worked in
@@ -54,9 +59,15 @@ round — going straight from one to the other is the point — only once the ro
 is done. Uneven set counts are fine; the shorter exercise drops out of the last
 rounds.
 
-Exercises that need the same physical item can't be linked at all: the editor
-says which item they clash on, and the API refuses to save it. The plate check
-is separate and stays advisory, since it depends on the weights of the day.
+Rest comes after every round. The only set that never earns one is the first
+half of a superset — going straight to the partner is the point — and the very
+last set of the workout, when there is nothing left to rest for.
+
+Exercises that need the same physical item can't be linked, unless that item is
+marked **shareable**: a bench takes a second to re-angle, so two lifts can share
+one, while a loaded bar cannot. The editor says which item a clashing pair
+collide on, and the API refuses to save it. The plate check is separate and
+stays advisory, since it depends on the weights of the day.
 
 ## Running it
 
@@ -145,6 +156,12 @@ consistent copy while it's running:
 docker exec forklift node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('/data/forklift.db').exec(\"VACUUM INTO '/data/backup.db'\")"
 ```
 
+## Which build is running
+
+The home screen shows the version, and `/api/version` returns it. CI stamps the
+commit sha into the image, so it is the quickest way to tell whether the server
+is running the change you just made.
+
 ## Install on your phone
 
 Open it in mobile Chrome or Safari and use *Add to Home Screen*. It runs
@@ -184,11 +201,14 @@ running instance upgrades its own volume on restart.
 | `GET/POST` | `/api/regimens` | |
 | `GET/PUT/DELETE` | `/api/regimens/:id` | |
 | `GET` | `/api/regimens/:id/superset-pairs` | which pairs can be supersetted, and why not |
+| `GET` | `/api/version` | which build is running |
 | `GET/POST` | `/api/sessions` | history / start a workout |
 | `GET` | `/api/sessions/active` | the unfinished session, if any |
 | `GET/DELETE` | `/api/sessions/:id` | |
 | `POST` | `/api/sessions/:id/sets` | log a set |
 | `DELETE` | `/api/sessions/:id/sets/:setId` | undo a set |
+| `POST` | `/api/sessions/:id/skips` | skip an exercise for this session, with a reason |
+| `DELETE` | `/api/sessions/:id/skips/:itemId` | put it back |
 | `POST` | `/api/sessions/:id/finish` | |
 
 ## Tests
@@ -197,7 +217,7 @@ running instance upgrades its own volume on restart.
 npm test
 ```
 
-Runs the plate arithmetic against known loadings and the superset ordering
+Runs the plate arithmetic against known loadings, the superset and skip ordering
 against known regimens, then boots the API on a throwaway database and exercises
 the whole flow.
 CI runs this plus `npm run typecheck` and a client build before any image is

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { buzz, primeAudio, ringBell } from '../audio';
 import { formatClock } from '../format';
 import { Sheet } from './ui';
 
@@ -10,32 +11,10 @@ export interface RestState {
 
 const CHOICES = [60, 90, 120];
 
-/** Short buzz + beep when the rest is up — the phone is usually face down. */
+/** Bell and buzz when the rest is up — the phone is usually face down. */
 function alertDone(): void {
-  try {
-    navigator.vibrate?.([120, 80, 120]);
-  } catch {
-    /* vibration unsupported — the visual state is enough */
-  }
-  try {
-    const Ctor =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctor) return;
-    const ctx = new Ctor();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.5);
-    osc.onended = () => void ctx.close();
-  } catch {
-    /* autoplay policy or no audio device — silent is fine */
-  }
+  buzz();
+  ringBell();
 }
 
 interface RestTimerProps {
@@ -83,6 +62,7 @@ export function RestTimer({
   );
 
   const setDuration = (seconds: number) => {
+    primeAudio();
     setAlerted(false);
     onChange({ endsAt: Date.now() + seconds * 1000, duration: seconds });
   };

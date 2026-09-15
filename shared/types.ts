@@ -40,6 +40,12 @@ export interface Equipment {
   incrementKg: number;
   minWeightKg: number;
   maxWeightKg: number;
+  /**
+   * Can be shared by both halves of a superset. A bench takes a moment to
+   * re-angle, so two lifts can share one; a loaded bar cannot be shared, because
+   * it would have to be stripped and re-loaded between every set.
+   */
+  supersetFriendly: boolean;
   notes: string;
 }
 
@@ -88,6 +94,16 @@ export interface SetLog {
   completedAt: string;
 }
 
+/** An exercise passed over in one session, and why. */
+export interface SessionSkip {
+  id: number;
+  sessionId: number;
+  regimenItemId: number;
+  exerciseId: number;
+  reason: string;
+  createdAt: string;
+}
+
 export interface Session {
   id: number;
   regimenId: number | null;
@@ -96,6 +112,7 @@ export interface Session {
   endedAt: string | null;
   notes: string;
   sets: SetLog[];
+  skips: SessionSkip[];
 }
 
 export interface SessionSummary {

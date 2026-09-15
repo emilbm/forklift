@@ -79,6 +79,9 @@ jobs:
           # bearing in mind it builds under emulation and is much slower.
           platforms: linux/amd64
           push: true
+          build-args: |
+            FORKLIFT_VERSION=${{ github.sha }}
+            FORKLIFT_BUILT_AT=${{ github.event.repository.updated_at }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

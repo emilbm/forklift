@@ -55,10 +55,20 @@ export function supersetGroups<T extends { supersetWithNext: boolean }>(items: T
   return groups;
 }
 
-export function planWorkout(items: RegimenItem[]): WorkoutStep[] {
+export interface PlanOptions {
+  /** Regimen items passed over for this session; they drop out of the plan. */
+  skippedItemIds?: ReadonlySet<number>;
+}
+
+export function planWorkout(items: RegimenItem[], options: PlanOptions = {}): WorkoutStep[] {
+  const skipped = options.skippedItemIds ?? new Set<number>();
   const steps: WorkoutStep[] = [];
 
-  supersetGroups(items).forEach((group, groupIndex) => {
+  // Dropping a skipped item before grouping means its partner simply becomes an
+  // ordinary exercise rather than half of a superset with nothing to alternate.
+  const active = items.filter((item) => !skipped.has(item.id));
+
+  supersetGroups(active).forEach((group, groupIndex) => {
     // Uneven set counts are allowed: an exercise simply drops out of later
     // rounds once its sets are done.
     const rounds = Math.max(...group.map((item) => item.sets), 0);
@@ -67,7 +77,6 @@ export function planWorkout(items: RegimenItem[]): WorkoutStep[] {
       const working = group.filter((item) => round < item.sets);
       working.forEach((item, position) => {
         const lastOfRound = position === working.length - 1;
-        const moreRounds = group.some((other) => round + 1 < other.sets);
         steps.push({
           item,
           setIndex: round,
@@ -75,11 +84,18 @@ export function planWorkout(items: RegimenItem[]): WorkoutStep[] {
           groupIndex,
           round,
           lastOfRound,
-          restSeconds: lastOfRound && moreRounds ? item.restSeconds : 0,
+          // Rest after every round. The only set that never earns one is the
+          // first half of a superset — going straight to the partner is the
+          // whole point. The very last set of the workout is handled below.
+          restSeconds: lastOfRound ? item.restSeconds : 0,
         });
       });
     }
   });
+
+  // Nothing left to rest for once the workout is over.
+  const last = steps.at(-1);
+  if (last) last.restSeconds = 0;
 
   return steps;
 }

@@ -8,6 +8,7 @@ import type {
   Regimen,
   Session,
   SessionSummary,
+  SessionSkip,
   SetLog,
   SupersetPair,
 } from '../../shared/types';
@@ -64,6 +65,7 @@ export interface EquipmentInput {
   incrementKg: number;
   minWeightKg: number;
   maxWeightKg: number;
+  supersetFriendly: boolean;
   notes: string;
 }
 
@@ -92,7 +94,14 @@ export interface PlateInput {
   count: number;
 }
 
+export interface VersionInfo {
+  version: string;
+  builtAt: string | null;
+}
+
 export const api = {
+  version: () => request<VersionInfo>('GET', '/version'),
+
   plates: {
     list: () => request<Plate[]>('GET', '/plates'),
     create: (input: PlateInput) => request<Plate>('POST', '/plates', input),
@@ -162,6 +171,14 @@ export const api = {
     ) => request<SetLog>('POST', `/sessions/${sessionId}/sets`, input),
     removeSet: (sessionId: number, setId: number) =>
       request<void>('DELETE', `/sessions/${sessionId}/sets/${setId}`),
+    skip: (sessionId: number, regimenItemId: number, exerciseId: number, reason: string) =>
+      request<SessionSkip>('POST', `/sessions/${sessionId}/skips`, {
+        regimenItemId,
+        exerciseId,
+        reason,
+      }),
+    unskip: (sessionId: number, regimenItemId: number) =>
+      request<void>('DELETE', `/sessions/${sessionId}/skips/${regimenItemId}`),
     finish: (sessionId: number, notes?: string) =>
       request<Session>('POST', `/sessions/${sessionId}/finish`, notes ? { notes } : {}),
     remove: (sessionId: number) => request<void>('DELETE', `/sessions/${sessionId}`),

@@ -18,6 +18,7 @@ const equipmentBody = z.object({
   incrementKg: z.number().min(0).max(100).default(0),
   minWeightKg: z.number().min(0).max(1000).default(0),
   maxWeightKg: z.number().min(0).max(1000).default(0),
+  supersetFriendly: z.boolean().default(false),
   notes: z.string().max(500).default(''),
 });
 
@@ -96,7 +97,7 @@ function supersetEquipmentClash(items: Array<{ exerciseId: number; supersetWithN
   | null {
   const byId = new Map(exercises.list().map((e) => [e.id, e]));
   const named = (id: number) => byId.get(id)?.name ?? `exercise #${id}`;
-  const equipmentName = new Map(equipment.list().map((e) => [e.id, e.name]));
+  const equipmentById = new Map(equipment.list().map((e) => [e.id, e]));
 
   for (const group of supersetGroups(items)) {
     for (let i = 0; i < group.length; i++) {
@@ -104,9 +105,9 @@ function supersetEquipmentClash(items: Array<{ exerciseId: number; supersetWithN
         const a = byId.get(group[i]!.exerciseId);
         const b = byId.get(group[j]!.exerciseId);
         if (!a || !b) continue;
-        const shared = sharedEquipment(a, b);
+        const shared = sharedEquipment(a, b, equipmentById);
         if (shared.length > 0) {
-          const names = shared.map((id) => equipmentName.get(id) ?? `#${id}`).join(', ');
+          const names = shared.map((id) => equipmentById.get(id)?.name ?? `#${id}`).join(', ');
           return `${named(a.id)} and ${named(b.id)} can't be supersetted — both need ${names}.`;
         }
       }
@@ -142,6 +143,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/health', async () => ({ ok: true }));
+
+  // Which build is running — the first thing worth knowing when something
+  // behaves differently than expected on the server.
+  app.get('/api/version', async () => ({
+    version: process.env.FORKLIFT_VERSION ?? 'dev',
+    builtAt: process.env.FORKLIFT_BUILT_AT ?? null,
+  }));
 
   /* -------------------------------------------------------------- plates */
 
@@ -391,6 +399,35 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return sessions.removeSet(id, setId)
       ? reply.status(204).send()
       : reply.status(404).send({ error: 'Set not found' });
+  });
+
+  /**
+   * Pass over an exercise for this session — equipment in use, a niggle, no
+   * time. It drops out of the plan and the reason is kept with the workout.
+   */
+  app.post('/api/sessions/:id/skips', async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const { regimenItemId, exerciseId, reason } = z
+      .object({
+        regimenItemId: z.number().int().positive(),
+        exerciseId: z.number().int().positive(),
+        reason: z.string().max(200).default(''),
+      })
+      .parse(req.body);
+    if (!sessions.get(id)) return reply.status(404).send({ error: 'Session not found' });
+    return reply.status(201).send(sessions.skip(id, regimenItemId, exerciseId, reason.trim()));
+  });
+
+  app.delete('/api/sessions/:id/skips/:itemId', async (req, reply) => {
+    const { id, itemId } = z
+      .object({
+        id: z.coerce.number().int().positive(),
+        itemId: z.coerce.number().int().positive(),
+      })
+      .parse(req.params);
+    return sessions.unskip(id, itemId)
+      ? reply.status(204).send()
+      : reply.status(404).send({ error: 'Not skipped' });
   });
 
   app.post('/api/sessions/:id/finish', async (req, reply) => {

@@ -8,6 +8,7 @@ import type {
   Regimen,
   RegimenItem,
   Session,
+  SessionSkip,
   SessionSummary,
   SetLog,
 } from '../../shared/types.js';
@@ -23,6 +24,7 @@ interface EquipmentRow {
   increment_kg: number;
   min_weight_kg: number;
   max_weight_kg: number;
+  superset_friendly: number;
   notes: string;
 }
 
@@ -73,6 +75,7 @@ const toEquipment = (r: EquipmentRow): Equipment => ({
   incrementKg: r.increment_kg,
   minWeightKg: r.min_weight_kg,
   maxWeightKg: r.max_weight_kg,
+  supersetFriendly: r.superset_friendly === 1,
   notes: r.notes,
 });
 
@@ -139,6 +142,7 @@ export interface EquipmentInput {
   incrementKg: number;
   minWeightKg: number;
   maxWeightKg: number;
+  supersetFriendly: boolean;
   notes: string;
 }
 
@@ -153,8 +157,9 @@ export const equipment = {
   create(input: EquipmentInput): Equipment {
     const { lastInsertRowid } = run(
       `INSERT INTO equipment
-         (name, kind, uses_plates, bar_weight_kg, increment_kg, min_weight_kg, max_weight_kg, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (name, kind, uses_plates, bar_weight_kg, increment_kg, min_weight_kg, max_weight_kg,
+          superset_friendly, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.name,
       input.kind,
       input.usesPlates ? 1 : 0,
@@ -162,6 +167,7 @@ export const equipment = {
       input.incrementKg,
       input.minWeightKg,
       input.maxWeightKg,
+      input.supersetFriendly ? 1 : 0,
       input.notes,
     );
     return equipment.get(lastInsertRowid)!;
@@ -170,7 +176,8 @@ export const equipment = {
     run(
       `UPDATE equipment
           SET name = ?, kind = ?, uses_plates = ?, bar_weight_kg = ?,
-              increment_kg = ?, min_weight_kg = ?, max_weight_kg = ?, notes = ?
+              increment_kg = ?, min_weight_kg = ?, max_weight_kg = ?,
+              superset_friendly = ?, notes = ?
         WHERE id = ?`,
       input.name,
       input.kind,
@@ -179,6 +186,7 @@ export const equipment = {
       input.incrementKg,
       input.minWeightKg,
       input.maxWeightKg,
+      input.supersetFriendly ? 1 : 0,
       input.notes,
       id,
     );
@@ -364,6 +372,18 @@ export const sessions = {
       'SELECT * FROM set_logs WHERE session_id = ? ORDER BY completed_at, id',
       id,
     ).map(toSetLog);
+    const skips = all<SessionSkip>(
+      `SELECT id,
+              session_id      AS sessionId,
+              regimen_item_id AS regimenItemId,
+              exercise_id     AS exerciseId,
+              reason,
+              created_at      AS createdAt
+         FROM session_skips
+        WHERE session_id = ?
+        ORDER BY id`,
+      id,
+    );
     return {
       id: row.id,
       regimenId: row.regimen_id,
@@ -372,7 +392,45 @@ export const sessions = {
       endedAt: row.ended_at,
       notes: row.notes,
       sets,
+      skips,
     };
+  },
+
+  /** Pass over an exercise for this session. Skipping twice just updates why. */
+  skip(sessionId: number, regimenItemId: number, exerciseId: number, reason: string): SessionSkip {
+    run(
+      `INSERT INTO session_skips (session_id, regimen_item_id, exercise_id, reason, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (session_id, regimen_item_id)
+       DO UPDATE SET reason = excluded.reason`,
+      sessionId,
+      regimenItemId,
+      exerciseId,
+      reason,
+      nowIso(),
+    );
+    return get<SessionSkip>(
+      `SELECT id,
+              session_id      AS sessionId,
+              regimen_item_id AS regimenItemId,
+              exercise_id     AS exerciseId,
+              reason,
+              created_at      AS createdAt
+         FROM session_skips
+        WHERE session_id = ? AND regimen_item_id = ?`,
+      sessionId,
+      regimenItemId,
+    )!;
+  },
+
+  unskip(sessionId: number, regimenItemId: number): boolean {
+    return (
+      run(
+        'DELETE FROM session_skips WHERE session_id = ? AND regimen_item_id = ?',
+        sessionId,
+        regimenItemId,
+      ).changes > 0
+    );
   },
 
   /** The most recently started session that has not been finished, if any. */

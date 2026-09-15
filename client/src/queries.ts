@@ -8,6 +8,7 @@ import {
 } from './api';
 
 export const keys = {
+  version: ['version'] as const,
   plates: ['plates'] as const,
   equipment: ['equipment'] as const,
   equipmentLoads: (id: number) => ['equipment', id, 'loads'] as const,
@@ -25,6 +26,10 @@ export const keys = {
   lastPerformance: (exerciseId: number, excludeSessionId?: number) =>
     ['exercises', exerciseId, 'last-performance', excludeSessionId ?? null] as const,
 };
+
+/** Which build is running. Rarely changes, so it is fetched once. */
+export const useVersion = () =>
+  useQuery({ queryKey: keys.version, queryFn: api.version, staleTime: Infinity });
 
 /* ----------------------------------------------------------------- plates */
 

@@ -142,7 +142,11 @@ try {
     minWeightKg: 2,
     maxWeightKg: 32,
   });
-  const bench = await call('POST', '/equipment', { name: 'Bench', kind: 'bench' });
+  const bench = await call('POST', '/equipment', {
+    name: 'Bench',
+    kind: 'bench',
+    supersetFriendly: true,
+  });
   check(
     'creates equipment',
     [barbell, ezbar, dumbbells, bench].every((r) => r.status === 201),
@@ -389,8 +393,8 @@ try {
     findPair(judged.body, deadlift.body.id, press.body.id),
   );
   check(
-    'still blocks two exercises sharing the bench',
-    findPair(judged.body, press.body.id, row.body.id)?.compatible === false,
+    'allows two exercises sharing only equipment marked shareable',
+    findPair(judged.body, press.body.id, row.body.id)?.compatible === true,
     findPair(judged.body, press.body.id, row.body.id),
   );
   check(
@@ -462,8 +466,10 @@ try {
     supersetOk.body?.items.map((i) => i.supersetWithNext),
   );
 
-  const supersetClash = await call('POST', '/regimens', {
-    name: 'C - Impossible',
+  // Bench Press and Dumbbell Row share only the bench, which is marked
+  // shareable, so they are allowed to pair up.
+  const sharedBench = await call('POST', '/regimens', {
+    name: 'C - Shared bench',
     items: [
       {
         exerciseId: press.body.id,
@@ -477,18 +483,39 @@ try {
     ],
   });
   check(
-    'refuses a superset whose exercises need the same equipment',
+    'allows a superset sharing equipment that is quick to hand over',
+    sharedBench.status === 201,
+    sharedBench,
+  );
+
+  // The barbell is not shareable: it would have to be stripped and re-loaded.
+  const supersetClash = await call('POST', '/regimens', {
+    name: 'D - Impossible',
+    items: [
+      {
+        exerciseId: deadlift.body.id,
+        sets: 3,
+        repsMin: 5,
+        repsMax: 5,
+        restSeconds: 120,
+        supersetWithNext: true,
+      },
+      { exerciseId: press.body.id, sets: 3, repsMin: 8, repsMax: 12, restSeconds: 90 },
+    ],
+  });
+  check(
+    'refuses a superset whose exercises need the same bar',
     supersetClash.status === 400,
     supersetClash,
   );
   check(
     'and names the equipment they clash on',
-    (supersetClash.body?.error ?? '').includes('Bench'),
+    (supersetClash.body?.error ?? '').includes('Barbell'),
     supersetClash.body?.error,
   );
 
   const trailingLink = await call('POST', '/regimens', {
-    name: 'D - Trailing link',
+    name: 'E - Trailing link',
     items: [
       {
         exerciseId: curl.body.id,
@@ -535,6 +562,72 @@ try {
     'keeps a workout when an unrelated exercise is deleted',
     survivor.status === 200 && survivor.body.sets.length === 1,
     survivor.status,
+  );
+
+  /* ------------------------------------------------------------ skipping */
+
+  const skipSession = await call('POST', '/sessions', { regimenId: supersetOk.body.id });
+  const skipItem = supersetOk.body.items[1];
+
+  const skipped = await call('POST', `/sessions/${skipSession.body.id}/skips`, {
+    regimenItemId: skipItem.id,
+    exerciseId: skipItem.exerciseId,
+    reason: 'Equipment in use',
+  });
+  check('skips an exercise with a reason', skipped.status === 201, skipped);
+
+  const withSkip = await call('GET', `/sessions/${skipSession.body.id}`);
+  check(
+    'reports the skip with the session',
+    withSkip.body?.skips.length === 1 && withSkip.body.skips[0].reason === 'Equipment in use',
+    withSkip.body?.skips,
+  );
+
+  const reskipped = await call('POST', `/sessions/${skipSession.body.id}/skips`, {
+    regimenItemId: skipItem.id,
+    exerciseId: skipItem.exerciseId,
+    reason: 'Changed my mind',
+  });
+  const afterReskip = await call('GET', `/sessions/${skipSession.body.id}`);
+  check(
+    'skipping twice updates the reason rather than duplicating',
+    reskipped.status === 201 &&
+      afterReskip.body.skips.length === 1 &&
+      afterReskip.body.skips[0].reason === 'Changed my mind',
+    afterReskip.body?.skips,
+  );
+
+  const unskipped = await call(
+    'DELETE',
+    `/sessions/${skipSession.body.id}/skips/${skipItem.id}`,
+  );
+  check('puts a skipped exercise back', unskipped.status === 204, unskipped.status);
+
+  const afterUnskip = await call('GET', `/sessions/${skipSession.body.id}`);
+  check('and the skip is gone', afterUnskip.body.skips.length === 0, afterUnskip.body.skips);
+
+  const unskipMissing = await call(
+    'DELETE',
+    `/sessions/${skipSession.body.id}/skips/${skipItem.id}`,
+  );
+  check('404s un-skipping what was not skipped', unskipMissing.status === 404, unskipMissing.status);
+
+  const skipUnknownSession = await call('POST', '/sessions/9999/skips', {
+    regimenItemId: skipItem.id,
+    exerciseId: skipItem.exerciseId,
+    reason: '',
+  });
+  check('refuses a skip on an unknown session', skipUnknownSession.status === 404, skipUnknownSession.status);
+
+  await call('POST', `/sessions/${skipSession.body.id}/finish`, {});
+
+  /* -------------------------------------------------------------- version */
+
+  const version = await call('GET', '/version');
+  check(
+    'reports which build is running',
+    version.status === 200 && typeof version.body.version === 'string',
+    version.body,
   );
 
   /* -------------------------------------------------------- static hosting */

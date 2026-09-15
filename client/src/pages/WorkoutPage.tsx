@@ -4,8 +4,16 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { Equipment, RegimenItem, SetLog } from '../../../shared/types';
 import { currentStepIndex, planWorkout } from '../../../shared/plan';
 import { api } from '../api';
+import { primeAudio } from '../audio';
 import { RestTimer, type RestState } from '../components/RestTimer';
-import { ErrorBanner, IconCheck, IconClose, Sheet, Spinner } from '../components/ui';
+import {
+  DecimalInput,
+  ErrorBanner,
+  IconCheck,
+  IconClose,
+  Sheet,
+  Spinner,
+} from '../components/ui';
 import { formatDuration, formatReps, formatWeight } from '../format';
 import {
   invalidateSessions,
@@ -40,6 +48,7 @@ export default function WorkoutPage() {
   const [error, setError] = useState<unknown>(null);
   const [logging, setLogging] = useState(false);
   const [finishing, setFinishing] = useState(false);
+  const [skipping, setSkipping] = useState<RegimenItem | null>(null);
 
   useWakeLock(session.data?.endedAt === null);
 
@@ -54,7 +63,15 @@ export default function WorkoutPage() {
    * The order the sets are actually done in. A supersetted pair alternates —
    * A1, B1, A2, B2 — so progress is tracked by step, not by exercise.
    */
-  const steps = useMemo(() => planWorkout(items), [items]);
+  const skippedItemIds = useMemo(
+    () => new Set((session.data?.skips ?? []).map((skip) => skip.regimenItemId)),
+    [session.data?.skips],
+  );
+
+  const steps = useMemo(
+    () => planWorkout(items, { skippedItemIds }),
+    [items, skippedItemIds],
+  );
 
   /** Sets already logged for each regimen item, in the order they were done. */
   const setsByItem = useMemo(() => {
@@ -164,6 +181,9 @@ export default function WorkoutPage() {
 
   async function logSet(reps: number) {
     if (!item || logging) return;
+    // iOS only lets audio start from a gesture; this is the gesture that
+    // precedes every rest, so it is where the bell gets its permission.
+    primeAudio();
     setLogging(true);
     setError(null);
     try {
@@ -185,6 +205,27 @@ export default function WorkoutPage() {
       setError(err);
     } finally {
       setLogging(false);
+    }
+  }
+
+  async function skipExercise(target: RegimenItem, reason: string) {
+    setError(null);
+    try {
+      await api.sessions.skip(sessionId, target.id, target.exerciseId, reason);
+      invalidateSessions(qc, sessionId);
+      setSkipping(null);
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  async function unskipExercise(regimenItemId: number) {
+    setError(null);
+    try {
+      await api.sessions.unskip(sessionId, regimenItemId);
+      invalidateSessions(qc, sessionId);
+    } catch (err) {
+      setError(err);
     }
   }
 
@@ -262,7 +303,8 @@ export default function WorkoutPage() {
           {items.map((entry) => {
             const logged = setsByItem.get(entry.id)?.length ?? 0;
             const complete = logged >= entry.sets;
-            const linked = entry.supersetWithNext || steps.some(
+            const isSkipped = skippedItemIds.has(entry.id);
+            const linked = steps.some(
               (other) => other.group.includes(entry) && other.group.length > 1,
             );
             return (
@@ -270,8 +312,14 @@ export default function WorkoutPage() {
                 key={entry.id}
                 className={`exnav__item${entry.id === item?.id ? ' exnav__item--current' : ''}${
                   complete ? ' exnav__item--done' : ''
-                }${linked ? ' exnav__item--linked' : ''}`}
+                }${linked ? ' exnav__item--linked' : ''}${
+                  isSkipped ? ' exnav__item--skipped' : ''
+                }`}
                 onClick={() => {
+                  if (isSkipped) {
+                    void unskipExercise(entry.id);
+                    return;
+                  }
                   setFollowProgress(false);
                   // Jump to this exercise's next outstanding set, not to set one.
                   const target = steps.findIndex(
@@ -281,11 +329,11 @@ export default function WorkoutPage() {
                   if (target >= 0) setIndex(target);
                 }}
               >
-                {complete && <IconCheck size={13} />}
+                {complete && !isSkipped && <IconCheck size={13} />}
                 {linked && '⇄ '}
                 {exerciseName.get(entry.exerciseId) ?? '?'}{' '}
                 <span className="num faint">
-                  {logged}/{entry.sets}
+                  {isSkipped ? 'skipped' : `${logged}/${entry.sets}`}
                 </span>
               </button>
             );
@@ -319,6 +367,12 @@ export default function WorkoutPage() {
                 </div>
               </div>
 
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="btn btn--sm btn--ghost" onClick={() => setSkipping(item)}>
+                  Skip this exercise
+                </button>
+              </div>
+
               {partners.length > 0 && (
                 <div className="superset-note">
                   ⇄ Superset with {partners.map((p) => exerciseName.get(p.exerciseId) ?? '?').join(' and ')}
@@ -331,10 +385,12 @@ export default function WorkoutPage() {
               {lastTime.data && (
                 <p className="tiny faint" style={{ margin: '8px 0 0' }}>
                   Last time:{' '}
-                  {lastTime.data.sets
-                    .map((s) => `${s.reps}×${formatWeight(s.weightKg)}`)
-                    .join(', ')}{' '}
-                  kg
+                  {lastTime.data.sets.some((s) => s.weightKg !== null)
+                    ? `${lastTime.data.sets
+                        .map((s) => `${s.reps}×${formatWeight(s.weightKg)}`)
+                        .join(', ')} kg`
+                    : // No weight was recorded, so don't print "8×— kg".
+                      `${lastTime.data.sets.map((s) => `${s.reps}`).join(', ')} reps`}
                 </p>
               )}
 
@@ -371,18 +427,13 @@ export default function WorkoutPage() {
                     −
                   </button>
                   <div>
-                    <input
+                    <DecimalInput
                       id="weight"
                       className="weight__value num"
-                      type="number"
-                      inputMode="decimal"
-                      step={FALLBACK_STEP}
                       min={0}
                       placeholder="—"
-                      value={weight ?? ''}
-                      onChange={(e) =>
-                        setWeight(e.target.value === '' ? null : Number(e.target.value))
-                      }
+                      value={weight}
+                      onChange={setWeight}
                     />
                     <div className="weight__unit" style={{ textAlign: 'center' }}>
                       kg
@@ -419,6 +470,32 @@ export default function WorkoutPage() {
           </>
         )}
 
+        {session.data.skips.length > 0 && (
+          <div className="card" style={{ marginTop: 12 }}>
+            <strong className="small">Skipped today</strong>
+            <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+              {session.data.skips.map((skip) => (
+                <div key={skip.id} className="row row--between">
+                  <span className="grow small">
+                    {exerciseName.get(skip.exerciseId) ?? 'Exercise'}
+                    {skip.reason && (
+                      <span className="tiny faint" style={{ display: 'block' }}>
+                        {skip.reason}
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    className="btn btn--sm btn--ghost"
+                    onClick={() => unskipExercise(skip.regimenItemId)}
+                  >
+                    Put back
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {allDone && (
           <button
             className="btn btn--primary btn--block btn--lg"
@@ -431,6 +508,14 @@ export default function WorkoutPage() {
         )}
       </main>
 
+      {skipping && (
+        <SkipSheet
+          name={exerciseName.get(skipping.exerciseId) ?? 'this exercise'}
+          onSkip={(reason) => skipExercise(skipping, reason)}
+          onClose={() => setSkipping(null)}
+        />
+      )}
+
       {rest && item && (
         <RestTimer
           rest={rest}
@@ -441,6 +526,71 @@ export default function WorkoutPage() {
         />
       )}
     </>
+  );
+}
+
+/** Why an exercise was passed over. The usual answers, plus room to say more. */
+const SKIP_REASONS = [
+  'Equipment in use',
+  'Niggle or pain',
+  'Short on time',
+  'Did something else',
+  'Too tired',
+];
+
+function SkipSheet({
+  name,
+  onSkip,
+  onClose,
+}: {
+  name: string;
+  onSkip: (reason: string) => void;
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState('');
+
+  return (
+    <Sheet title={`Skip ${name}?`} onClose={onClose}>
+      <div className="stack">
+        <p className="small muted" style={{ margin: 0 }}>
+          It drops out of today&rsquo;s workout and the reason is kept with it. Tap it in the strip
+          at the top to put it back.
+        </p>
+
+        <div className="row row--wrap" style={{ gap: 8 }}>
+          {SKIP_REASONS.map((option) => (
+            <button
+              key={option}
+              className={`btn btn--sm ${reason === option ? 'btn--primary' : ''}`}
+              onClick={() => setReason(option)}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+
+        <div className="field">
+          <label htmlFor="skip-reason">Reason</label>
+          <input
+            id="skip-reason"
+            className="input"
+            value={reason}
+            placeholder="Optional"
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </div>
+
+        <button
+          className="btn btn--primary btn--block btn--lg"
+          onClick={() => onSkip(reason.trim())}
+        >
+          Skip it
+        </button>
+        <button className="btn btn--ghost btn--block" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Sheet>
   );
 }
 

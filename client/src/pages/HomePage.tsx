@@ -10,6 +10,7 @@ import {
   usePlates,
   useRegimens,
   useSessionHistory,
+  useVersion,
 } from '../queries';
 
 export default function HomePage() {
@@ -19,6 +20,7 @@ export default function HomePage() {
   const regimens = useRegimens();
   const active = useActiveSession();
   const history = useSessionHistory(3);
+  const version = useVersion();
   const navigate = useNavigate();
 
   const [starting, setStarting] = useState<number | null>(null);
@@ -188,6 +190,14 @@ export default function HomePage() {
               </>
             )}
           </>
+        )}
+
+        {/* Which build this is — the first thing to check when the app on the
+            server behaves differently from the one you just changed. */}
+        {version.data && (
+          <p className="tiny faint" style={{ textAlign: 'center', marginTop: 28 }}>
+            Forklift {version.data.version}
+          </p>
         )}
       </main>
     </>
