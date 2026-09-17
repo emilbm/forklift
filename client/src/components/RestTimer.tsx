@@ -21,6 +21,9 @@ interface RestTimerProps {
 /**
  * The rest sheet. It only draws the clock: the clock itself belongs to
  * `useRest`, so closing this carries on counting and still rings.
+ *
+ * There is no button for that — tapping outside the sheet is how you put any
+ * sheet away, and it does the same here. Only `Skip rest` ends the rest.
  */
 export function RestTimer({ rest, children }: RestTimerProps) {
   const { done } = rest;
@@ -73,10 +76,6 @@ export function RestTimer({ rest, children }: RestTimerProps) {
             {done ? 'Next set' : 'Skip rest'}
           </button>
         </div>
-
-        <button className="btn btn--ghost btn--block" style={{ marginTop: 8 }} onClick={rest.hide}>
-          {done ? 'Close' : 'Hide — keep resting'}
-        </button>
       </div>
     </Sheet>
   );

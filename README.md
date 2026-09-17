@@ -58,10 +58,11 @@ offers only a comma.
 ### The rest timer
 
 The countdown is part of the workout, not part of the dialog that shows it.
-Hiding the timer — to look at what is coming, or to change a weight — leaves it
-running: it shrinks to a strip along the bottom of the screen, still counting,
-and still rings when it is up. Tapping the strip brings the full timer back;
-**Skip rest** is what actually ends it.
+Putting the timer away — to look at what is coming, or to change a weight —
+leaves it running: tap outside it, as with any sheet, and it shrinks to a strip
+along the bottom of the screen, still counting and still ringing when it is up.
+Tapping the strip brings the full timer back; **Skip rest** is what actually
+ends it.
 
 The bell is a struck bell rather than a beep, and Safari needs it armed from a
 tap, so every rep button also wakes the audio context. iOS parks that context
