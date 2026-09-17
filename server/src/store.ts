@@ -1,8 +1,10 @@
 import { all, get, nowIso, run, tx } from './db.js';
 import type {
+  Effort,
   Equipment,
   EquipmentKind,
   Exercise,
+  ExerciseEffort,
   LastPerformance,
   Plate,
   Regimen,
@@ -350,6 +352,15 @@ export interface LogSetInput {
   weightKg: number | null;
 }
 
+/** Effort rows are read back in three places; the column aliases live here once. */
+const EFFORT_COLUMNS = `SELECT id,
+          session_id      AS sessionId,
+          exercise_id     AS exerciseId,
+          regimen_item_id AS regimenItemId,
+          effort,
+          created_at      AS createdAt
+     FROM exercise_efforts`;
+
 export const sessions = {
   start(regimenId: number | null): Session {
     const regimen =
@@ -393,7 +404,53 @@ export const sessions = {
       notes: row.notes,
       sets,
       skips,
+      efforts: sessions.efforts(id),
     };
+  },
+
+  /** How each exercise felt in this session. */
+  efforts(sessionId: number): ExerciseEffort[] {
+    return all<ExerciseEffort>(EFFORT_COLUMNS + ' WHERE session_id = ? ORDER BY id', sessionId);
+  },
+
+  /**
+   * Rate how an exercise felt once its sets are done. Rating it again just
+   * changes the answer — it is one judgement per exercise per session.
+   */
+  rateEffort(
+    sessionId: number,
+    exerciseId: number,
+    regimenItemId: number | null,
+    effort: Effort,
+  ): ExerciseEffort {
+    run(
+      `INSERT INTO exercise_efforts (session_id, exercise_id, regimen_item_id, effort, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (session_id, exercise_id)
+       DO UPDATE SET effort = excluded.effort,
+                     regimen_item_id = excluded.regimen_item_id,
+                     created_at = excluded.created_at`,
+      sessionId,
+      exerciseId,
+      regimenItemId,
+      effort,
+      nowIso(),
+    );
+    return get<ExerciseEffort>(
+      EFFORT_COLUMNS + ' WHERE session_id = ? AND exercise_id = ?',
+      sessionId,
+      exerciseId,
+    )!;
+  },
+
+  clearEffort(sessionId: number, exerciseId: number): boolean {
+    return (
+      run(
+        'DELETE FROM exercise_efforts WHERE session_id = ? AND exercise_id = ?',
+        sessionId,
+        exerciseId,
+      ).changes > 0
+    );
   },
 
   /** Pass over an exercise for this session. Skipping twice just updates why. */
@@ -516,6 +573,17 @@ export const sessions = {
       exerciseId,
       row.sessionId,
     );
-    return { exerciseId, sessionId: row.sessionId, performedAt: row.performedAt, sets };
+    const rated = get<{ effort: Effort }>(
+      'SELECT effort FROM exercise_efforts WHERE session_id = ? AND exercise_id = ?',
+      row.sessionId,
+      exerciseId,
+    );
+    return {
+      exerciseId,
+      sessionId: row.sessionId,
+      performedAt: row.performedAt,
+      sets,
+      effort: rated?.effort ?? null,
+    };
   },
 };

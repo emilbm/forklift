@@ -1,7 +1,9 @@
 import type {
   AchievableLoads,
+  Effort,
   Equipment,
   Exercise,
+  ExerciseEffort,
   LastPerformance,
   LoadPlanResult,
   Plate,
@@ -179,6 +181,19 @@ export const api = {
       }),
     unskip: (sessionId: number, regimenItemId: number) =>
       request<void>('DELETE', `/sessions/${sessionId}/skips/${regimenItemId}`),
+    rateEffort: (
+      sessionId: number,
+      exerciseId: number,
+      regimenItemId: number | null,
+      effort: Effort,
+    ) =>
+      request<ExerciseEffort>('POST', `/sessions/${sessionId}/efforts`, {
+        exerciseId,
+        regimenItemId,
+        effort,
+      }),
+    clearEffort: (sessionId: number, exerciseId: number) =>
+      request<void>('DELETE', `/sessions/${sessionId}/efforts/${exerciseId}`),
     finish: (sessionId: number, notes?: string) =>
       request<Session>('POST', `/sessions/${sessionId}/finish`, notes ? { notes } : {}),
     remove: (sessionId: number) => request<void>('DELETE', `/sessions/${sessionId}`),

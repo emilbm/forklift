@@ -104,6 +104,23 @@ export interface SessionSkip {
   createdAt: string;
 }
 
+/**
+ * How an exercise felt once its last set was done. Recorded per session, and
+ * read back the next time the exercise comes round: what felt easy gets one
+ * more increment on the bar.
+ */
+export type Effort = 'easy' | 'ok' | 'hard';
+
+export interface ExerciseEffort {
+  id: number;
+  sessionId: number;
+  exerciseId: number;
+  /** The regimen line it was rated on, when there was one. */
+  regimenItemId: number | null;
+  effort: Effort;
+  createdAt: string;
+}
+
 export interface Session {
   id: number;
   regimenId: number | null;
@@ -113,6 +130,7 @@ export interface Session {
   notes: string;
   sets: SetLog[];
   skips: SessionSkip[];
+  efforts: ExerciseEffort[];
 }
 
 export interface SessionSummary {
@@ -132,6 +150,8 @@ export interface LastPerformance {
   sessionId: number;
   performedAt: string;
   sets: Array<{ setIndex: number; reps: number; weightKg: number | null }>;
+  /** How it felt that day, if it was rated. Null means it wasn't. */
+  effort: Effort | null;
 }
 
 /* -------------------------------------------------------------- loading */

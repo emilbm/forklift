@@ -225,6 +225,28 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_session_skips_session ON session_skips(session_id);
   `,
+
+  // 5 — how an exercise felt.
+  //
+  // Rated once its last set is done: easy, ok or hard. Next time the exercise
+  // comes round, an easy day puts one more increment on the bar — the smallest
+  // useful form of progression, and one that only the lifter can judge.
+  //
+  // Keyed on the exercise rather than the regimen line, because that is how it
+  // is read back: the same lift in a different regimen is still the same lift.
+  `
+  CREATE TABLE exercise_efforts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    exercise_id     INTEGER NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+    regimen_item_id INTEGER,
+    effort          TEXT NOT NULL CHECK (effort IN ('easy', 'ok', 'hard')),
+    created_at      TEXT NOT NULL,
+    UNIQUE (session_id, exercise_id)
+  );
+  CREATE INDEX idx_exercise_efforts_session ON exercise_efforts(session_id);
+  CREATE INDEX idx_exercise_efforts_exercise ON exercise_efforts(exercise_id, created_at DESC);
+  `,
 ];
 
 export function migrate(): void {

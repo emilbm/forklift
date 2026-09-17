@@ -24,6 +24,9 @@ keeps counting while the screen is off.
   weight steps between loads that really exist — what your plates can make, or
   the rungs of the rack — and shows what to hang on the bar. Any exercise can be
   skipped for the day, with a reason kept against the session.
+- **Progression** — the last set of an exercise asks how it felt: easy, ok or
+  hard. An easy day puts one more increment on the bar the next time that
+  exercise comes round.
 - **History** — every session, set by set, with volume and duration.
 
 ### Plates, and why supersets need them
@@ -51,6 +54,29 @@ in history counts one hand for a two-dumbbell lift.
 
 Weight fields take a comma or a full stop, because a Danish iPhone's number pad
 offers only a comma.
+
+### The rest timer
+
+The countdown is part of the workout, not part of the dialog that shows it.
+Hiding the timer — to look at what is coming, or to change a weight — leaves it
+running: it shrinks to a strip along the bottom of the screen, still counting,
+and still rings when it is up. Tapping the strip brings the full timer back;
+**Skip rest** is what actually ends it.
+
+The bell is a struck bell rather than a beep, and Safari needs it armed from a
+tap, so every rep button also wakes the audio context. iOS parks that context
+whenever something else takes the audio session — a call, another app, the
+screen locking — and leaves it in a state that never recovers on its own, so it
+is revived before every ring rather than once at the start.
+
+### Progression
+
+Once the last set of an exercise is logged, Forklift asks how it felt. **Easy**
+means the next session starts one increment heavier — the next rung your plates
+or your rack can actually make, not a flat 2.5 kg. **OK** and **hard** hold the
+weight where it is: one hard day is a working set at the edge, not a reason to
+take weight off. The rating is kept per session, so the history says why the
+weight moved when it did.
 
 ### Supersets
 
@@ -181,6 +207,7 @@ shared/types.ts     types used by both sides
 server/src/db.ts    schema and migrations (node:sqlite, no native module)
 server/src/store.ts all queries
 shared/plan.ts      the order sets are performed in, supersets included
+shared/progress.ts  stepping the weight, and what an easy day earns next time
 server/src/plates.ts    plate arithmetic: what can be loaded, and what can be loaded at once
 server/src/superset.ts  the superset rules, built on that
 server/src/routes.ts    the HTTP API
@@ -214,6 +241,8 @@ running instance upgrades its own volume on restart.
 | `DELETE` | `/api/sessions/:id/sets/:setId` | undo a set |
 | `POST` | `/api/sessions/:id/skips` | skip an exercise for this session, with a reason |
 | `DELETE` | `/api/sessions/:id/skips/:itemId` | put it back |
+| `POST` | `/api/sessions/:id/efforts` | how an exercise felt: easy, ok or hard |
+| `DELETE` | `/api/sessions/:id/efforts/:exerciseId` | take the rating back |
 | `POST` | `/api/sessions/:id/finish` | |
 
 ## Tests
@@ -223,8 +252,8 @@ npm test
 ```
 
 Runs the plate arithmetic against known loadings, the superset and skip ordering
-against known regimens, then boots the API on a throwaway database and exercises
-the whole flow.
+against known regimens, the weight ladder and the progression rule, then boots
+the API on a throwaway database and exercises the whole flow.
 CI runs this plus `npm run typecheck` and a client build before any image is
 published, so `latest` is always a build that passed.
 

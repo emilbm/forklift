@@ -438,6 +438,65 @@ try {
   );
   check('can exclude the current session', excluded.status === 404, excluded.status);
 
+  /* --------------------------------------------------------- how it felt */
+
+  const rated = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+    regimenItemId: regimen.body.items[0].id,
+    effort: 'easy',
+  });
+  check('records how an exercise felt', rated.status === 201 && rated.body.effort === 'easy', rated.body);
+
+  const withEffort = await call('GET', `/sessions/${sessionId}`);
+  check(
+    'reports the rating with the session',
+    withEffort.body.efforts.length === 1 && withEffort.body.efforts[0].effort === 'easy',
+    withEffort.body.efforts,
+  );
+
+  const reRated = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+    regimenItemId: regimen.body.items[0].id,
+    effort: 'hard',
+  });
+  const afterReRate = await call('GET', `/sessions/${sessionId}`);
+  check(
+    'changing your mind replaces the rating rather than adding one',
+    reRated.status === 201 &&
+      afterReRate.body.efforts.length === 1 &&
+      afterReRate.body.efforts[0].effort === 'hard',
+    afterReRate.body.efforts,
+  );
+
+  const ratedLast = await call('GET', `/exercises/${deadlift.body.id}/last-performance`);
+  check(
+    'the prefill knows how it felt',
+    ratedLast.body?.effort === 'hard',
+    ratedLast.body?.effort,
+  );
+
+  const nonsense = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+    effort: 'grand',
+  });
+  check('refuses a verdict it does not know', nonsense.status === 400, nonsense.status);
+
+  const strayEffort = await call('POST', '/sessions/9999/efforts', {
+    exerciseId: deadlift.body.id,
+    effort: 'ok',
+  });
+  check('refuses a rating on an unknown session', strayEffort.status === 404, strayEffort.status);
+
+  const unrated = await call('DELETE', `/sessions/${sessionId}/efforts/${deadlift.body.id}`);
+  const afterUnrate = await call('GET', `/exercises/${deadlift.body.id}/last-performance`);
+  check(
+    'a rating can be taken back',
+    unrated.status === 204 && afterUnrate.body?.effort === null,
+    afterUnrate.body?.effort,
+  );
+  const unratedTwice = await call('DELETE', `/sessions/${sessionId}/efforts/${deadlift.body.id}`);
+  check('404s un-rating what was not rated', unratedTwice.status === 404, unratedTwice.status);
+
   /* -------------------------------------------------------------- supersets */
 
   const supersetOk = await call('POST', '/regimens', {

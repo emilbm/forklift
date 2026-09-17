@@ -430,6 +430,35 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       : reply.status(404).send({ error: 'Not skipped' });
   });
 
+  /**
+   * How an exercise felt today. The next time it comes round, an easy day puts
+   * one more increment on the bar — see `shared/progress.ts` for the rule.
+   */
+  app.post('/api/sessions/:id/efforts', async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const { exerciseId, regimenItemId, effort } = z
+      .object({
+        exerciseId: z.number().int().positive(),
+        regimenItemId: z.number().int().positive().nullable().default(null),
+        effort: z.enum(['easy', 'ok', 'hard']),
+      })
+      .parse(req.body);
+    if (!sessions.get(id)) return reply.status(404).send({ error: 'Session not found' });
+    return reply.status(201).send(sessions.rateEffort(id, exerciseId, regimenItemId, effort));
+  });
+
+  app.delete('/api/sessions/:id/efforts/:exerciseId', async (req, reply) => {
+    const { id, exerciseId } = z
+      .object({
+        id: z.coerce.number().int().positive(),
+        exerciseId: z.coerce.number().int().positive(),
+      })
+      .parse(req.params);
+    return sessions.clearEffort(id, exerciseId)
+      ? reply.status(204).send()
+      : reply.status(404).send({ error: 'Not rated' });
+  });
+
   app.post('/api/sessions/:id/finish', async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const { notes } = z.object({ notes: z.string().max(1000).optional() }).parse(req.body ?? {});

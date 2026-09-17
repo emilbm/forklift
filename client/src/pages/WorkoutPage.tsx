@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Equipment, RegimenItem, SetLog } from '../../../shared/types';
-import { currentStepIndex, planWorkout } from '../../../shared/plan';
+import type { Effort, Equipment, RegimenItem, SetLog } from '../../../shared/types';
+import { currentStepIndex, planWorkout, type WorkoutStep } from '../../../shared/plan';
+import { nextWeightDown, nextWeightUp, suggestWeight } from '../../../shared/progress';
 import { formatAgo } from '../../../shared/time';
 import { api } from '../api';
 import { primeAudio } from '../audio';
-import { RestTimer, type RestState } from '../components/RestTimer';
+import { RestBar, RestTimer } from '../components/RestTimer';
 import {
   DecimalInput,
   ErrorBanner,
@@ -26,6 +27,7 @@ import {
   useRegimen,
   useSession,
 } from '../queries';
+import { useRest } from '../rest';
 import { useWakeLock } from '../useWakeLock';
 
 /** Used when nothing better is known — no bar, or no plates recorded yet. */
@@ -44,8 +46,12 @@ export default function WorkoutPage() {
 
   const [index, setIndex] = useState(0);
   const [followProgress, setFollowProgress] = useState(true);
-  const [rest, setRest] = useState<RestState | null>(null);
+  const rest = useRest();
   const [weights, setWeights] = useState<Record<number, number | null>>({});
+  /** The exercise whose last set was just logged, waiting to be rated. */
+  const [rating, setRating] = useState<RegimenItem | null>(null);
+  /** Ratings answered but not yet confirmed by a refetch. */
+  const [pendingEfforts, setPendingEfforts] = useState<Record<number, Effort>>({});
   const [error, setError] = useState<unknown>(null);
   const [logging, setLogging] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -115,27 +121,29 @@ export default function WorkoutPage() {
   const sameRoundNext =
     step && upNext && upNext.group === step.group && upNext.round === step.round ? upNext : null;
 
+  /**
+   * The steps of this round. A pair with uneven set counts stops being a pair
+   * once the shorter exercise runs out, so the round — not the group — is what
+   * decides whether there is still someone to alternate with.
+   */
+  const roundSteps = useMemo(
+    () =>
+      step === undefined
+        ? []
+        : steps.filter((other) => other.group === step.group && other.round === step.round),
+    [steps, step],
+  );
+
+  /** The same pair coming round again after the rest, if it does. */
+  const nextRoundFirst = upNext && step && upNext.group === step.group ? upNext : null;
+
   const lastTime = useLastPerformance(item?.exerciseId ?? null, sessionId);
 
-  /**
-   * Weight to show: what was used earlier in this session, else last time's
-   * working weight, else blank so nothing is silently invented.
-   */
-  const suggestedWeight = useMemo(() => {
-    if (!item) return null;
-    // The most recent weight that was actually recorded — a set logged without
-    // one shouldn't wipe out the suggestion.
-    const lastRecorded = (sets: Array<{ weightKg: number | null }>): number | null => {
-      for (let i = sets.length - 1; i >= 0; i--) {
-        const weightKg = sets[i]?.weightKg;
-        if (weightKg !== null && weightKg !== undefined) return weightKg;
-      }
-      return null;
-    };
-    return lastRecorded(done) ?? lastRecorded(lastTime.data?.sets ?? []);
-  }, [item, done, lastTime.data]);
-
-  const weight = item && item.id in weights ? weights[item.id]! : suggestedWeight;
+  /** How each exercise of this session was rated — the answer shows at once. */
+  const effortFor = (exerciseId: number): Effort | null =>
+    pendingEfforts[exerciseId] ??
+    (session.data?.efforts ?? []).find((e) => e.exerciseId === exerciseId)?.effort ??
+    null;
 
   /**
    * What decides the weights on offer: a plate-loaded bar, or a rack or stack
@@ -157,6 +165,49 @@ export default function WorkoutPage() {
   const bar = weightSource?.usesPlates ? weightSource : null;
   const loadable = useEquipmentLoads(weightSource?.id ?? null);
   const achievable = loadable.data?.weights ?? [];
+
+  /**
+   * The weights this equipment can actually be set to. Null while a bar's
+   * plates are still loading, so a suggestion waits rather than guessing at an
+   * increment; empty when the weight is simply typed in, which steps freely.
+   */
+  const ladder = useMemo(
+    () => (weightSource === null ? [] : loadable.data ? loadable.data.weights : null),
+    [weightSource, loadable.data],
+  );
+
+  /**
+   * Weight to show: what was used earlier in this session, else last time's
+   * working weight — one increment heavier if last time felt easy.
+   */
+  const suggestion = useMemo(() => {
+    if (!item) return { value: null, upFrom: null };
+    // The most recent weight that was actually recorded — a set logged without
+    // one shouldn't wipe out the suggestion.
+    const lastRecorded = (sets: Array<{ weightKg: number | null }>): number | null => {
+      for (let i = sets.length - 1; i >= 0; i--) {
+        const weightKg = sets[i]?.weightKg;
+        if (weightKg !== null && weightKg !== undefined) return weightKg;
+      }
+      return null;
+    };
+
+    const inSession = lastRecorded(done);
+    if (inSession !== null) return { value: inSession, upFrom: null };
+
+    const lastWeightKg = lastRecorded(lastTime.data?.sets ?? []);
+    const value = suggestWeight({
+      lastWeightKg,
+      effort: lastTime.data?.effort ?? null,
+      ladder,
+      fallbackStepKg: FALLBACK_STEP,
+    });
+    const upFrom =
+      value !== null && lastWeightKg !== null && value > lastWeightKg ? lastWeightKg : null;
+    return { value, upFrom };
+  }, [item, done, lastTime.data, ladder]);
+
+  const weight = item && item.id in weights ? weights[item.id]! : suggestion.value;
 
   if (session.isLoading || (session.data?.regimenId !== null && regimen.isLoading)) {
     return (
@@ -208,6 +259,10 @@ export default function WorkoutPage() {
       });
       invalidateSessions(qc, sessionId);
 
+      // The last set of an exercise earns a verdict: easy, ok or hard. It is
+      // asked here, while the exercise is still what you were just doing.
+      setRating(done.length + 1 >= item.sets ? item : null);
+
       // Move on straight away rather than waiting for the refetch to say so —
       // in a superset the jump to the partner is the whole interaction, and a
       // round trip of hesitation reads as the link not working.
@@ -229,12 +284,36 @@ export default function WorkoutPage() {
       // after the final round, otherwise the length the regimen prescribes.
       const seconds = step?.restSeconds ?? 0;
       if (seconds > 0) {
-        setRest({ endsAt: Date.now() + seconds * 1000, duration: seconds });
+        rest.start(seconds, {
+          after: exerciseName.get(item.exerciseId) ?? 'that',
+          next: describeStep(next, exerciseName),
+        });
+      } else {
+        // Straight on to the partner — any rest still on screen is over.
+        rest.stop();
       }
     } catch (err) {
       setError(err);
     } finally {
       setLogging(false);
+    }
+  }
+
+  async function rateEffort(target: RegimenItem, effort: Effort) {
+    setError(null);
+    // Show the answer at once; the refetch confirms it a moment later.
+    setPendingEfforts((prev) => ({ ...prev, [target.exerciseId]: effort }));
+    try {
+      await api.sessions.rateEffort(sessionId, target.exerciseId, target.id, effort);
+      invalidateSessions(qc, sessionId);
+    } catch (err) {
+      // Take the answer back off the screen rather than showing one that isn't saved.
+      setPendingEfforts((prev) => {
+        const next = { ...prev };
+        delete next[target.exerciseId];
+        return next;
+      });
+      setError(err);
     }
   }
 
@@ -284,28 +363,21 @@ export default function WorkoutPage() {
   const setWeight = (next: number | null) =>
     item && setWeights((prev) => ({ ...prev, [item.id]: next }));
 
+  /** The collapsed rest strip takes room at the bottom of the page. */
+  const restBarShowing = rest.state !== null && !rest.open;
+
   /**
    * Step to the next weight the plates can actually make, rather than a fixed
    * 2.5 kg that might land on something unloadable.
    */
   const stepWeight = (direction: 1 | -1) => {
     const current = weight ?? weightSource?.barWeightKg ?? 0;
-    if (achievable.length === 0) {
-      setWeight(Math.max(0, current + direction * FALLBACK_STEP));
-      return;
-    }
-    const next =
+    setWeight(
       direction === 1
-        ? achievable.find((w) => w > current + 1e-9)
-        : [...achievable].reverse().find((w) => w < current - 1e-9);
-    if (next !== undefined) setWeight(next);
+        ? nextWeightUp(current, achievable, FALLBACK_STEP)
+        : nextWeightDown(current, achievable, FALLBACK_STEP),
+    );
   };
-
-  const nextLabel = upNext
-    ? `Next: ${exerciseName.get(upNext.item.exerciseId) ?? 'next exercise'}, set ${
-        upNext.setIndex + 1
-      } of ${upNext.item.sets}`
-    : 'Last set — workout done after this';
 
   return (
     <>
@@ -326,7 +398,7 @@ export default function WorkoutPage() {
         </button>
       </header>
 
-      <main className="main main--nonav">
+      <main className={`main main--nonav${restBarShowing ? ' main--restbar' : ''}`}>
         <ErrorBanner error={error} />
 
         <div className="exnav">
@@ -403,19 +475,21 @@ export default function WorkoutPage() {
                 </button>
               </div>
 
-              {step && step.group.length > 1 && (
+              {step && roundSteps.length > 1 && (
                 <div className="superset-note">
                   <span>
-                    ⇄ Superset — {step.group.indexOf(item) + 1} of {step.group.length}
+                    ⇄ Superset — {roundSteps.indexOf(step) + 1} of {roundSteps.length}
                   </span>
                   <span className="superset-note__next">
                     {sameRoundNext
                       ? `No rest — straight on to ${
                           exerciseName.get(sameRoundNext.item.exerciseId) ?? 'the next lift'
                         }`
-                      : `Rest after this, then back to ${
-                          exerciseName.get(step.group[0]!.exerciseId) ?? 'the first lift'
-                        }`}
+                      : nextRoundFirst
+                        ? `Rest after this, then back to ${
+                            exerciseName.get(nextRoundFirst.item.exerciseId) ?? 'the first lift'
+                          }`
+                        : 'Rest after this — last round of the pair'}
                   </span>
                 </div>
               )}
@@ -433,7 +507,22 @@ export default function WorkoutPage() {
                         .join(', ')} kg`
                     : // No weight was recorded, so don't print "8×— kg".
                       `${lastTime.data.sets.map((s) => `${s.reps}`).join(', ')} reps`}
+                  {lastTime.data.effort && ` — felt ${lastTime.data.effort}`}
+                  {suggestion.upFrom !== null && (
+                    <span className="lasttime__up">
+                      , so {formatWeight(suggestion.upFrom)} → {formatWeight(suggestion.value)}{' '}
+                      kg today
+                    </span>
+                  )}
                 </p>
+              )}
+
+              {done.length >= item.sets && (
+                <EffortPicker
+                  name={exerciseName.get(item.exerciseId) ?? 'that'}
+                  value={effortFor(item.exerciseId)}
+                  onPick={(effort) => rateEffort(item, effort)}
+                />
               )}
 
               <div className="setdots" style={{ marginTop: 12 }}>
@@ -558,16 +647,79 @@ export default function WorkoutPage() {
         />
       )}
 
-      {rest && item && (
-        <RestTimer
-          rest={rest}
-          exerciseName={exerciseName.get(item.exerciseId) ?? 'that'}
-          nextLabel={nextLabel}
-          onChange={setRest}
-          onDismiss={() => setRest(null)}
-        />
+      {restBarShowing && <RestBar rest={rest} />}
+
+      {rest.open && rest.state && (
+        <RestTimer rest={rest}>
+          {rating && (
+            <EffortPicker
+              name={exerciseName.get(rating.exerciseId) ?? 'that'}
+              value={effortFor(rating.exerciseId)}
+              onPick={(effort) => rateEffort(rating, effort)}
+            />
+          )}
+        </RestTimer>
       )}
     </>
+  );
+}
+
+/** What comes next, for the rest sheet to show while you wait. */
+function describeStep(
+  next: WorkoutStep | undefined,
+  exerciseName: Map<number, string>,
+): string {
+  if (!next) return 'Last set — workout done after this';
+  return `Next: ${exerciseName.get(next.item.exerciseId) ?? 'next exercise'}, set ${
+    next.setIndex + 1
+  } of ${next.item.sets}`;
+}
+
+/**
+ * How the exercise felt, asked once its last set is in.
+ *
+ * Only the lifter can judge this, and it is the one thing needed to know
+ * whether to put more on the bar next time. Easy does exactly that; ok and hard
+ * both hold the weight where it is, and are worth recording so the history says
+ * why nothing moved.
+ */
+const EFFORTS: Array<{ value: Effort; label: string }> = [
+  { value: 'easy', label: 'Easy' },
+  { value: 'ok', label: 'OK' },
+  { value: 'hard', label: 'Hard' },
+];
+
+function EffortPicker({
+  name,
+  value,
+  onPick,
+}: {
+  name: string;
+  value: Effort | null;
+  onPick: (effort: Effort) => void;
+}) {
+  return (
+    <div className="effort">
+      <p className="effort__ask small">How did {name} feel?</p>
+      <div className="effort__row">
+        {EFFORTS.map((option) => (
+          <button
+            key={option.value}
+            className={`btn effort__btn${
+              value === option.value ? ` effort__btn--on effort__btn--${option.value}` : ''
+            }`}
+            onClick={() => onPick(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <p className="tiny faint effort__note">
+        {value === 'easy'
+          ? 'Next time starts one increment heavier.'
+          : 'Easy puts one more increment on the bar next time.'}
+      </p>
+    </div>
   );
 }
 
