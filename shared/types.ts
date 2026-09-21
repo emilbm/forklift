@@ -117,8 +117,24 @@ export interface ExerciseEffort {
   exerciseId: number;
   /** The regimen line it was rated on, when there was one. */
   regimenItemId: number | null;
-  effort: Effort;
+  /** Null when a note was written without a verdict. */
+  effort: Effort | null;
+  /** A note to next time: why the weight was down, what to watch. */
+  note: string;
   createdAt: string;
+}
+
+/**
+ * The last thing worth saying about an exercise, shown when it next comes
+ * round. Either a note written after doing it, or the reason it was skipped —
+ * whichever happened most recently.
+ */
+export interface ExerciseNote {
+  exerciseId: number;
+  sessionId: number;
+  text: string;
+  at: string;
+  kind: 'rated' | 'skipped';
 }
 
 export interface Session {

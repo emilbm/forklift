@@ -353,6 +353,44 @@ try {
     reps: 10,
     weightKg: 60,
   });
+  const corrected = await call('PATCH', `/sessions/${sessionId}/sets/${spare.body.id}`, {
+    reps: 8,
+    weightKg: 62.5,
+  });
+  check(
+    'corrects a set that is already logged',
+    corrected.status === 200 && corrected.body.reps === 8 && corrected.body.weightKg === 62.5,
+    corrected.body,
+  );
+  check(
+    'and leaves it where it was in the session',
+    corrected.body?.completedAt === spare.body.completedAt &&
+      corrected.body?.setIndex === spare.body.setIndex,
+    corrected.body,
+  );
+
+  const repsOnly = await call('PATCH', `/sessions/${sessionId}/sets/${spare.body.id}`, {
+    reps: 9,
+  });
+  check(
+    'changing the reps leaves the weight alone',
+    repsOnly.body?.reps === 9 && repsOnly.body?.weightKg === 62.5,
+    repsOnly.body,
+  );
+
+  const clearedWeight = await call('PATCH', `/sessions/${sessionId}/sets/${spare.body.id}`, {
+    weightKg: null,
+  });
+  check('and the weight can be cleared outright', clearedWeight.body?.weightKg === null, clearedWeight.body);
+
+  const nonsenseReps = await call('PATCH', `/sessions/${sessionId}/sets/${spare.body.id}`, {
+    reps: 0,
+  });
+  check('refuses a set of no reps', nonsenseReps.status === 400, nonsenseReps.status);
+
+  const strangerSet = await call('PATCH', `/sessions/${sessionId}/sets/999999`, { reps: 5 });
+  check('404s correcting a set that is not there', strangerSet.status === 404, strangerSet.status);
+
   const undone = await call('DELETE', `/sessions/${sessionId}/sets/${spare.body.id}`);
   check('undoes a set', undone.status === 204, undone.status);
 
@@ -496,6 +534,63 @@ try {
   );
   const unratedTwice = await call('DELETE', `/sessions/${sessionId}/efforts/${deadlift.body.id}`);
   check('404s un-rating what was not rated', unratedTwice.status === 404, unratedTwice.status);
+
+  /* --------------------------------------------------- a note to next time */
+
+  const noted = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+    regimenItemId: regimen.body.items[0].id,
+    note: 'Slow off the floor, kept it light',
+  });
+  check(
+    'takes a note without a verdict',
+    noted.status === 201 && noted.body.note === 'Slow off the floor, kept it light' &&
+      noted.body.effort === null,
+    noted.body,
+  );
+
+  const ratedAfterNote = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+    effort: 'ok',
+  });
+  check(
+    'rating it afterwards keeps the note',
+    ratedAfterNote.body?.effort === 'ok' &&
+      ratedAfterNote.body?.note === 'Slow off the floor, kept it light',
+    ratedAfterNote.body,
+  );
+
+  const renoted = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+    note: 'Grip went before the legs did',
+  });
+  check(
+    'and rewriting the note keeps the rating',
+    renoted.body?.effort === 'ok' && renoted.body?.note === 'Grip went before the legs did',
+    renoted.body,
+  );
+
+  const emptyRating = await call('POST', `/sessions/${sessionId}/efforts`, {
+    exerciseId: deadlift.body.id,
+  });
+  check('refuses a rating that says nothing', emptyRating.status === 400, emptyRating.status);
+
+  const nextTime = await call('GET', `/exercises/${deadlift.body.id}/last-note`);
+  check(
+    'reads the note back for next time',
+    nextTime.body?.note?.text === 'Grip went before the legs did' &&
+      nextTime.body.note.kind === 'rated',
+    nextTime.body,
+  );
+
+  const ownNote = await call(
+    'GET',
+    `/exercises/${deadlift.body.id}/last-note?exclude=${sessionId}`,
+  );
+  check("today's own note is not a note from last time", ownNote.body?.note === null, ownNote.body);
+
+  const noNote = await call('GET', `/exercises/${press.body.id}/last-note`);
+  check('says nothing when there is nothing to say', noNote.body?.note === null, noNote.body);
 
   /* -------------------------------------------------------------- supersets */
 
@@ -656,6 +751,13 @@ try {
     afterReskip.body?.skips,
   );
 
+  const skipNote = await call('GET', `/exercises/${skipItem.exerciseId}/last-note`);
+  check(
+    'why it was skipped carries to next time',
+    skipNote.body?.note?.text === 'Changed my mind' && skipNote.body.note.kind === 'skipped',
+    skipNote.body,
+  );
+
   const unskipped = await call(
     'DELETE',
     `/sessions/${skipSession.body.id}/skips/${skipItem.id}`,
@@ -664,6 +766,13 @@ try {
 
   const afterUnskip = await call('GET', `/sessions/${skipSession.body.id}`);
   check('and the skip is gone', afterUnskip.body.skips.length === 0, afterUnskip.body.skips);
+
+  const skipNoteGone = await call('GET', `/exercises/${skipItem.exerciseId}/last-note`);
+  check(
+    'and so is the reason it left behind',
+    skipNoteGone.body?.note === null,
+    skipNoteGone.body,
+  );
 
   const unskipMissing = await call(
     'DELETE',

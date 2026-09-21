@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Effort, Equipment, RegimenItem, SetLog } from '../../../shared/types';
 import { currentStepIndex, planWorkout, type WorkoutStep } from '../../../shared/plan';
@@ -13,6 +13,7 @@ import {
   ErrorBanner,
   IconCheck,
   IconClose,
+  IconTrash,
   Sheet,
   Spinner,
 } from '../components/ui';
@@ -22,6 +23,7 @@ import {
   useEquipment,
   useEquipmentLoads,
   useExercises,
+  useLastNote,
   useLastPerformance,
   useLoadPlan,
   useRegimen,
@@ -56,6 +58,35 @@ export default function WorkoutPage() {
   const [logging, setLogging] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [skipping, setSkipping] = useState<RegimenItem | null>(null);
+  /** A set already logged, opened for correction. */
+  const [editing, setEditing] = useState<SetLog | null>(null);
+  /** Notes as typed, until the save comes back. */
+  const [noteDrafts, setNoteDrafts] = useState<Record<number, string>>({});
+
+  /**
+   * A note saves itself a moment after the typing stops — mid-workout is no
+   * place for a save button — and again on the way out, so leaving the page
+   * can't lose what was written.
+   */
+  const pendingNotes = useRef(new Map<number, { text: string; regimenItemId: number | null }>());
+  const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushNotes = useCallback(() => {
+    if (noteTimer.current !== null) {
+      clearTimeout(noteTimer.current);
+      noteTimer.current = null;
+    }
+    const pending = [...pendingNotes.current];
+    pendingNotes.current.clear();
+    for (const [exerciseId, draft] of pending) {
+      api.sessions
+        .recordEffort(sessionId, exerciseId, draft.regimenItemId, { note: draft.text })
+        .then(() => invalidateSessions(qc, sessionId))
+        .catch((err: unknown) => setError(err));
+    }
+  }, [sessionId, qc]);
+
+  useEffect(() => () => flushNotes(), [flushNotes]);
 
   useWakeLock(session.data?.endedAt === null);
 
@@ -138,12 +169,19 @@ export default function WorkoutPage() {
   const nextRoundFirst = upNext && step && upNext.group === step.group ? upNext : null;
 
   const lastTime = useLastPerformance(item?.exerciseId ?? null, sessionId);
+  const lastNote = useLastNote(item?.exerciseId ?? null, sessionId);
 
   /** How each exercise of this session was rated — the answer shows at once. */
   const effortFor = (exerciseId: number): Effort | null =>
     pendingEfforts[exerciseId] ??
     (session.data?.efforts ?? []).find((e) => e.exerciseId === exerciseId)?.effort ??
     null;
+
+  /** The note for this exercise today: what is being typed, else what is saved. */
+  const noteFor = (exerciseId: number): string =>
+    noteDrafts[exerciseId] ??
+    (session.data?.efforts ?? []).find((e) => e.exerciseId === exerciseId)?.note ??
+    '';
 
   /**
    * What decides the weights on offer: a plate-loaded bar, or a rack or stack
@@ -304,7 +342,7 @@ export default function WorkoutPage() {
     // Show the answer at once; the refetch confirms it a moment later.
     setPendingEfforts((prev) => ({ ...prev, [target.exerciseId]: effort }));
     try {
-      await api.sessions.rateEffort(sessionId, target.exerciseId, target.id, effort);
+      await api.sessions.recordEffort(sessionId, target.exerciseId, target.id, { effort });
       invalidateSessions(qc, sessionId);
     } catch (err) {
       // Take the answer back off the screen rather than showing one that isn't saved.
@@ -338,17 +376,41 @@ export default function WorkoutPage() {
     }
   }
 
-  async function undoSet(log: SetLog) {
+  /** Correct a set that is already in, rather than deleting and re-logging it. */
+  async function saveSet(log: SetLog, fields: { reps: number; weightKg: number | null }) {
     setError(null);
     try {
-      await api.sessions.removeSet(sessionId, log.id);
+      await api.sessions.updateSet(sessionId, log.id, fields);
       invalidateSessions(qc, sessionId);
+      setEditing(null);
     } catch (err) {
       setError(err);
     }
   }
 
+  async function undoSet(log: SetLog) {
+    setError(null);
+    try {
+      await api.sessions.removeSet(sessionId, log.id);
+      invalidateSessions(qc, sessionId);
+      setEditing(null);
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  /** Hold a note typed against this exercise, and save it once the typing stops. */
+  function queueNote(target: RegimenItem, text: string) {
+    setNoteDrafts((prev) => ({ ...prev, [target.exerciseId]: text }));
+    pendingNotes.current.set(target.exerciseId, { text, regimenItemId: target.id });
+    if (noteTimer.current !== null) clearTimeout(noteTimer.current);
+    noteTimer.current = setTimeout(flushNotes, 800);
+  }
+
   async function finish() {
+    // Finishing swaps this page for the summary without unmounting it, so the
+    // note in hand is saved here rather than by the usual cleanup.
+    flushNotes();
     setFinishing(true);
     setError(null);
     try {
@@ -457,10 +519,26 @@ export default function WorkoutPage() {
                     {exerciseName.get(item.exerciseId) ?? 'Unknown exercise'}
                   </h2>
                   <div className="wk-target num" style={{ marginTop: 4 }}>
-                    {/* Sets actually logged. Keeps telling the truth if you work
-                        past the prescription, which the plan no longer tracks. */}
-                    <span>{done.length}</span>
-                    <small>of {item.sets} sets</small>
+                    {/* The set you are about to do, which is what you want to
+                        read while standing over the bar. Once the prescribed
+                        sets are in it goes back to counting what was done — a
+                        count that keeps telling the truth if you work past the
+                        prescription, which the plan no longer tracks. */}
+                    {done.length < item.sets ? (
+                      <>
+                        <small>Set</small>
+                        <span>{done.length + 1}</span>
+                        <small>of {item.sets}</small>
+                      </>
+                    ) : (
+                      <>
+                        <span>{done.length}</span>
+                        <small>
+                          sets done
+                          {done.length > item.sets ? ` (${item.sets} planned)` : ''}
+                        </small>
+                      </>
+                    )}
                     <span className="faint" style={{ fontSize: '1.1rem' }}>
                       ·
                     </span>
@@ -517,11 +595,23 @@ export default function WorkoutPage() {
                 </p>
               )}
 
+              {lastNote.data && (
+                <p className="lastnote">
+                  <span className="lastnote__kind">
+                    {lastNote.data.kind === 'skipped' ? 'Skipped' : 'Note'}{' '}
+                    {formatAgo(lastNote.data.at)}
+                  </span>{' '}
+                  {lastNote.data.text}
+                </p>
+              )}
+
               {done.length >= item.sets && (
                 <EffortPicker
                   name={exerciseName.get(item.exerciseId) ?? 'that'}
                   value={effortFor(item.exerciseId)}
                   onPick={(effort) => rateEffort(item, effort)}
+                  note={noteFor(item.exerciseId)}
+                  onNote={(text) => queueNote(item, text)}
                 />
               )}
 
@@ -532,8 +622,8 @@ export default function WorkoutPage() {
                     <button
                       key={log.id}
                       className="setdot setdot--done"
-                      onClick={() => undoSet(log)}
-                      title="Tap to undo this set"
+                      onClick={() => setEditing(log)}
+                      title="Tap to change this set"
                     >
                       {log.reps} × {formatWeight(log.weightKg)}
                     </button>
@@ -639,6 +729,24 @@ export default function WorkoutPage() {
         )}
       </main>
 
+      {editing && (
+        <EditSetSheet
+          key={editing.id}
+          log={editing}
+          name={exerciseName.get(editing.exerciseId) ?? 'this exercise'}
+          setNumber={
+            // By id: a refetch replaces the row object this state is holding.
+            (setsByItem.get(editing.regimenItemId ?? -1) ?? []).findIndex(
+              (other) => other.id === editing.id,
+            ) + 1
+          }
+          ladder={achievable}
+          onSave={(fields) => saveSet(editing, fields)}
+          onDelete={() => undoSet(editing)}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
       {skipping && (
         <SkipSheet
           name={exerciseName.get(skipping.exerciseId) ?? 'this exercise'}
@@ -656,6 +764,8 @@ export default function WorkoutPage() {
               name={exerciseName.get(rating.exerciseId) ?? 'that'}
               value={effortFor(rating.exerciseId)}
               onPick={(effort) => rateEffort(rating, effort)}
+              note={noteFor(rating.exerciseId)}
+              onNote={(text) => queueNote(rating, text)}
             />
           )}
         </RestTimer>
@@ -693,10 +803,14 @@ function EffortPicker({
   name,
   value,
   onPick,
+  note,
+  onNote,
 }: {
   name: string;
   value: Effort | null;
   onPick: (effort: Effort) => void;
+  note: string;
+  onNote: (text: string) => void;
 }) {
   return (
     <div className="effort">
@@ -719,7 +833,136 @@ function EffortPicker({
           ? 'Next time starts one increment heavier.'
           : 'Easy puts one more increment on the bar next time.'}
       </p>
+
+      {/*
+        Anything the verdict can't say: why the weight was down, what the
+        shoulder did, what to try next. Shown the next time this exercise
+        comes round, which is the only moment it is any use.
+      */}
+      <textarea
+        className="textarea effort__notefield"
+        value={note}
+        rows={2}
+        placeholder="Note for next time — optional"
+        aria-label={`Note about ${name} for next time`}
+        onChange={(e) => onNote(e.target.value)}
+      />
     </div>
+  );
+}
+
+/**
+ * Correcting a set that is already logged.
+ *
+ * The wrong rep button under a thumb, or a bar that turned out not to be what
+ * you thought: both want the set changed, not deleted and done again.
+ */
+function EditSetSheet({
+  log,
+  name,
+  setNumber,
+  ladder,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  log: SetLog;
+  name: string;
+  setNumber: number;
+  /** Weights this equipment can be set to, so + and − land on real loads. */
+  ladder: number[];
+  onSave: (fields: { reps: number; weightKg: number | null }) => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const [reps, setReps] = useState<number | null>(log.reps);
+  const [weightKg, setWeightKg] = useState<number | null>(log.weightKg);
+  const [saving, setSaving] = useState(false);
+
+  // A set with no reps isn't a set; the rest can be anything.
+  const tidyReps = reps === null ? null : Math.max(1, Math.round(reps));
+
+  return (
+    <Sheet
+      title={`${name} — set ${setNumber > 0 ? setNumber : ''}`.trim()}
+      onClose={onClose}
+      onTop
+    >
+      <div className="stack">
+        <div className="field">
+          <label htmlFor="edit-reps">Reps</label>
+          <div className="weight">
+            <button
+              className="btn btn--icon"
+              onClick={() => setReps(Math.max(1, (tidyReps ?? log.reps) - 1))}
+              aria-label="One rep fewer"
+            >
+              −
+            </button>
+            <DecimalInput
+              id="edit-reps"
+              className="weight__value num"
+              min={1}
+              value={reps}
+              onChange={setReps}
+            />
+            <button
+              className="btn btn--icon"
+              onClick={() => setReps((tidyReps ?? log.reps) + 1)}
+              aria-label="One rep more"
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <div className="field">
+          <label htmlFor="edit-weight">Weight (kg)</label>
+          <div className="weight">
+            <button
+              className="btn btn--icon"
+              onClick={() => setWeightKg(nextWeightDown(weightKg ?? 0, ladder, FALLBACK_STEP))}
+              aria-label="Lighter"
+            >
+              −
+            </button>
+            <DecimalInput
+              id="edit-weight"
+              className="weight__value num"
+              min={0}
+              placeholder="—"
+              value={weightKg}
+              onChange={setWeightKg}
+            />
+            <button
+              className="btn btn--icon"
+              onClick={() => setWeightKg(nextWeightUp(weightKg ?? 0, ladder, FALLBACK_STEP))}
+              aria-label="Heavier"
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <button
+          className="btn btn--primary btn--block btn--lg"
+          disabled={tidyReps === null || saving}
+          onClick={() => {
+            if (tidyReps === null) return;
+            setSaving(true);
+            onSave({ reps: tidyReps, weightKg });
+          }}
+        >
+          Save changes
+        </button>
+        <button className="btn btn--ghost btn--block" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn btn--danger btn--block" onClick={onDelete}>
+          <IconTrash /> Delete this set
+        </button>
+      </div>
+    </Sheet>
   );
 }
 

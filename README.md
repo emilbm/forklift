@@ -23,10 +23,13 @@ keeps counting while the screen is off.
   weight, and the rest timer starts itself and rings a bell when it's up. The
   weight steps between loads that really exist — what your plates can make, or
   the rungs of the rack — and shows what to hang on the bar. Any exercise can be
-  skipped for the day, with a reason kept against the session.
+  skipped for the day, with a reason kept against the session, and any set
+  already logged can be tapped and corrected.
 - **Progression** — the last set of an exercise asks how it felt: easy, ok or
   hard. An easy day puts one more increment on the bar the next time that
-  exercise comes round.
+  exercise comes round. Underneath is room for a note to next time — why the
+  weight was down, what the shoulder did — shown against that exercise when it
+  next comes up, along with the reason it was skipped if it was.
 - **History** — every session, set by set, with volume and duration.
 
 ### Plates, and why supersets need them
@@ -78,6 +81,12 @@ or your rack can actually make, not a flat 2.5 kg. **OK** and **hard** hold the
 weight where it is: one hard day is a working set at the edge, not a reason to
 take weight off. The rating is kept per session, so the history says why the
 weight moved when it did.
+
+A verdict of easy, ok or hard cannot say *why*, so there is a note field under
+it. It saves itself a moment after you stop typing — a gym is no place for a
+save button — and comes back the next time that exercise appears, next to the
+weight it explains. A skip reason is read back the same way: whichever was
+written last is the one still worth reading.
 
 ### Supersets
 
@@ -231,6 +240,7 @@ running instance upgrades its own volume on restart.
 | `GET/POST` | `/api/exercises` | |
 | `PUT/DELETE` | `/api/exercises/:id` | |
 | `GET` | `/api/exercises/:id/last-performance` | prefills the weight in workout mode |
+| `GET` | `/api/exercises/:id/last-note` | what you told yourself last time, or why you skipped it |
 | `GET/POST` | `/api/regimens` | |
 | `GET/PUT/DELETE` | `/api/regimens/:id` | |
 | `GET` | `/api/regimens/:id/superset-pairs` | which pairs can be supersetted, and why not |
@@ -239,10 +249,11 @@ running instance upgrades its own volume on restart.
 | `GET` | `/api/sessions/active` | the unfinished session, if any |
 | `GET/DELETE` | `/api/sessions/:id` | |
 | `POST` | `/api/sessions/:id/sets` | log a set |
+| `PATCH` | `/api/sessions/:id/sets/:setId` | correct the reps or weight of a logged set |
 | `DELETE` | `/api/sessions/:id/sets/:setId` | undo a set |
 | `POST` | `/api/sessions/:id/skips` | skip an exercise for this session, with a reason |
 | `DELETE` | `/api/sessions/:id/skips/:itemId` | put it back |
-| `POST` | `/api/sessions/:id/efforts` | how an exercise felt: easy, ok or hard |
+| `POST` | `/api/sessions/:id/efforts` | how an exercise felt: easy, ok or hard, and a note for next time |
 | `DELETE` | `/api/sessions/:id/efforts/:exerciseId` | take the rating back |
 | `POST` | `/api/sessions/:id/finish` | |
 

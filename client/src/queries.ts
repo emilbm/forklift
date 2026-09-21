@@ -25,6 +25,8 @@ export const keys = {
   activeSession: ['sessions', 'active'] as const,
   lastPerformance: (exerciseId: number, excludeSessionId?: number) =>
     ['exercises', exerciseId, 'last-performance', excludeSessionId ?? null] as const,
+  lastNote: (exerciseId: number, excludeSessionId?: number) =>
+    ['exercises', exerciseId, 'last-note', excludeSessionId ?? null] as const,
 };
 
 /** Which build is running. Rarely changes, so it is fetched once. */
@@ -168,6 +170,15 @@ export const useLastPerformance = (exerciseId: number | null, excludeSessionId?:
   useQuery({
     queryKey: keys.lastPerformance(exerciseId ?? 0, excludeSessionId),
     queryFn: () => api.exercises.lastPerformance(exerciseId!, excludeSessionId),
+    enabled: exerciseId !== null,
+    staleTime: 5 * 60 * 1000,
+  });
+
+/** What was said about this exercise last time — a note, or why it was skipped. */
+export const useLastNote = (exerciseId: number | null, excludeSessionId?: number) =>
+  useQuery({
+    queryKey: keys.lastNote(exerciseId ?? 0, excludeSessionId),
+    queryFn: () => api.exercises.lastNote(exerciseId!, excludeSessionId),
     enabled: exerciseId !== null,
     staleTime: 5 * 60 * 1000,
   });

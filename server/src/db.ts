@@ -247,6 +247,42 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_exercise_efforts_session ON exercise_efforts(session_id);
   CREATE INDEX idx_exercise_efforts_exercise ON exercise_efforts(exercise_id, created_at DESC);
   `,
+
+  // 6 — a note to your future self.
+  //
+  // Why the weight was down, why a lift was left out, what to watch next time:
+  // things a rating of easy/ok/hard cannot say. It is read back the next time
+  // the exercise comes round, which is the only moment it is any use.
+  //
+  // The note hangs off the same row as the rating, but a note is often written
+  // without one, so `effort` loses its NOT NULL — which in SQLite means
+  // rebuilding the table. Skips keep their own reason; both are read together.
+  `
+  CREATE TABLE exercise_efforts_v2 (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    exercise_id     INTEGER NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+    regimen_item_id INTEGER,
+    effort          TEXT CHECK (effort IS NULL OR effort IN ('easy', 'ok', 'hard')),
+    note            TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    UNIQUE (session_id, exercise_id)
+  );
+
+  INSERT INTO exercise_efforts_v2
+      (id, session_id, exercise_id, regimen_item_id, effort, note, created_at)
+    SELECT id, session_id, exercise_id, regimen_item_id, effort, '', created_at
+      FROM exercise_efforts;
+
+  DROP TABLE exercise_efforts;
+  ALTER TABLE exercise_efforts_v2 RENAME TO exercise_efforts;
+
+  CREATE INDEX idx_exercise_efforts_session ON exercise_efforts(session_id);
+  CREATE INDEX idx_exercise_efforts_exercise ON exercise_efforts(exercise_id, created_at DESC);
+
+  -- Skip reasons are read back by exercise too, now that they carry forward.
+  CREATE INDEX idx_session_skips_exercise ON session_skips(exercise_id, created_at DESC);
+  `,
 ];
 
 export function migrate(): void {

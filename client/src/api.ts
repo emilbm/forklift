@@ -4,6 +4,7 @@ import type {
   Equipment,
   Exercise,
   ExerciseEffort,
+  ExerciseNote,
   LastPerformance,
   LoadPlanResult,
   Plate,
@@ -140,6 +141,11 @@ export const api = {
         if (err instanceof ApiError && err.status === 404) return null;
         throw err;
       }),
+    lastNote: (id: number, excludeSessionId?: number) =>
+      request<{ note: ExerciseNote | null }>(
+        'GET',
+        `/exercises/${id}/last-note${excludeSessionId ? `?exclude=${excludeSessionId}` : ''}`,
+      ).then((body) => body.note),
   },
 
   regimens: {
@@ -171,6 +177,11 @@ export const api = {
         weightKg: number | null;
       },
     ) => request<SetLog>('POST', `/sessions/${sessionId}/sets`, input),
+    updateSet: (
+      sessionId: number,
+      setId: number,
+      fields: { reps?: number; weightKg?: number | null },
+    ) => request<SetLog>('PATCH', `/sessions/${sessionId}/sets/${setId}`, fields),
     removeSet: (sessionId: number, setId: number) =>
       request<void>('DELETE', `/sessions/${sessionId}/sets/${setId}`),
     skip: (sessionId: number, regimenItemId: number, exerciseId: number, reason: string) =>
@@ -181,16 +192,17 @@ export const api = {
       }),
     unskip: (sessionId: number, regimenItemId: number) =>
       request<void>('DELETE', `/sessions/${sessionId}/skips/${regimenItemId}`),
-    rateEffort: (
+    /** How it felt, a note for next time, or both — whichever is sent is what changes. */
+    recordEffort: (
       sessionId: number,
       exerciseId: number,
       regimenItemId: number | null,
-      effort: Effort,
+      fields: { effort?: Effort; note?: string },
     ) =>
       request<ExerciseEffort>('POST', `/sessions/${sessionId}/efforts`, {
         exerciseId,
         regimenItemId,
-        effort,
+        ...fields,
       }),
     clearEffort: (sessionId: number, exerciseId: number) =>
       request<void>('DELETE', `/sessions/${sessionId}/efforts/${exerciseId}`),

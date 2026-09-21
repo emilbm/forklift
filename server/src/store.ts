@@ -5,6 +5,7 @@ import type {
   EquipmentKind,
   Exercise,
   ExerciseEffort,
+  ExerciseNote,
   LastPerformance,
   Plate,
   Regimen,
@@ -358,6 +359,7 @@ const EFFORT_COLUMNS = `SELECT id,
           exercise_id     AS exerciseId,
           regimen_item_id AS regimenItemId,
           effort,
+          note,
           created_at      AS createdAt
      FROM exercise_efforts`;
 
@@ -414,33 +416,55 @@ export const sessions = {
   },
 
   /**
-   * Rate how an exercise felt once its sets are done. Rating it again just
-   * changes the answer — it is one judgement per exercise per session.
+   * Record how an exercise felt, a note for next time, or both. There is one
+   * row per exercise per session, so saying it again changes the answer.
+   *
+   * The two halves are written separately because they arrive separately: a
+   * verdict is one tap at the end of the exercise, a note is typed afterwards
+   * and must not wipe the verdict — or be wiped by it.
    */
-  rateEffort(
+  recordEffort(
     sessionId: number,
     exerciseId: number,
     regimenItemId: number | null,
-    effort: Effort,
+    fields: { effort?: Effort; note?: string },
   ): ExerciseEffort {
-    run(
-      `INSERT INTO exercise_efforts (session_id, exercise_id, regimen_item_id, effort, created_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (session_id, exercise_id)
-       DO UPDATE SET effort = excluded.effort,
-                     regimen_item_id = excluded.regimen_item_id,
-                     created_at = excluded.created_at`,
-      sessionId,
-      exerciseId,
-      regimenItemId,
-      effort,
-      nowIso(),
-    );
-    return get<ExerciseEffort>(
-      EFFORT_COLUMNS + ' WHERE session_id = ? AND exercise_id = ?',
-      sessionId,
-      exerciseId,
-    )!;
+    return tx(() => {
+      run(
+        `INSERT INTO exercise_efforts (session_id, exercise_id, regimen_item_id, effort, note, created_at)
+         VALUES (?, ?, ?, NULL, '', ?)
+         ON CONFLICT (session_id, exercise_id) DO NOTHING`,
+        sessionId,
+        exerciseId,
+        regimenItemId,
+        nowIso(),
+      );
+      if (fields.effort !== undefined) {
+        run(
+          `UPDATE exercise_efforts
+              SET effort = ?, regimen_item_id = ?, created_at = ?
+            WHERE session_id = ? AND exercise_id = ?`,
+          fields.effort,
+          regimenItemId,
+          nowIso(),
+          sessionId,
+          exerciseId,
+        );
+      }
+      if (fields.note !== undefined) {
+        run(
+          'UPDATE exercise_efforts SET note = ? WHERE session_id = ? AND exercise_id = ?',
+          fields.note,
+          sessionId,
+          exerciseId,
+        );
+      }
+      return get<ExerciseEffort>(
+        EFFORT_COLUMNS + ' WHERE session_id = ? AND exercise_id = ?',
+        sessionId,
+        exerciseId,
+      )!;
+    });
   },
 
   clearEffort(sessionId: number, exerciseId: number): boolean {
@@ -533,6 +557,33 @@ export const sessions = {
     return toSetLog(get<SetLogRow>('SELECT * FROM set_logs WHERE id = ?', lastInsertRowid)!);
   },
 
+  /**
+   * Correct a set that is already in. Tapping the wrong rep button, or
+   * realising the bar was not what you thought, shouldn't mean deleting the
+   * set and logging it again — which would also move it to the end of the
+   * session. `completed_at` stays put: it is still when the set was done.
+   */
+  updateSet(
+    sessionId: number,
+    setId: number,
+    fields: { reps?: number; weightKg?: number | null },
+  ): SetLog | null {
+    const existing = get<SetLogRow>(
+      'SELECT * FROM set_logs WHERE id = ? AND session_id = ?',
+      setId,
+      sessionId,
+    );
+    if (!existing) return null;
+    run(
+      'UPDATE set_logs SET reps = ?, weight_kg = ? WHERE id = ? AND session_id = ?',
+      fields.reps ?? existing.reps,
+      fields.weightKg === undefined ? existing.weight_kg : fields.weightKg,
+      setId,
+      sessionId,
+    );
+    return toSetLog(get<SetLogRow>('SELECT * FROM set_logs WHERE id = ?', setId)!);
+  },
+
   removeSet(sessionId: number, setId: number): boolean {
     return run('DELETE FROM set_logs WHERE id = ? AND session_id = ?', setId, sessionId).changes > 0;
   },
@@ -549,6 +600,35 @@ export const sessions = {
 
   remove(id: number): boolean {
     return run('DELETE FROM sessions WHERE id = ?', id).changes > 0;
+  },
+
+  /**
+   * The last thing said about this exercise: a note written after doing it, or
+   * the reason it was skipped. Both are messages to the next session, so
+   * whichever came last is the one that still applies.
+   */
+  lastNote(exerciseId: number, excludeSessionId?: number): ExerciseNote | null {
+    const row = get<{
+      sessionId: number;
+      text: string;
+      at: string;
+      kind: 'rated' | 'skipped';
+    }>(
+      `SELECT session_id AS sessionId, note AS text, created_at AS at, 'rated' AS kind
+         FROM exercise_efforts
+        WHERE exercise_id = ? AND session_id IS NOT ? AND note <> ''
+        UNION ALL
+       SELECT session_id, reason, created_at, 'skipped'
+         FROM session_skips
+        WHERE exercise_id = ? AND session_id IS NOT ? AND reason <> ''
+        ORDER BY at DESC
+        LIMIT 1`,
+      exerciseId,
+      excludeSessionId ?? null,
+      exerciseId,
+      excludeSessionId ?? null,
+    );
+    return row ? { exerciseId, ...row } : null;
   },
 
   /** Sets from the last time this exercise was performed, used to prefill weights. */

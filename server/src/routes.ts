@@ -293,6 +293,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return performance ?? reply.status(404).send({ error: 'No history for this exercise' });
   });
 
+  /**
+   * The note left for this session: what was written after the exercise last
+   * time, or why it was skipped. Returned as a wrapper so "nothing to say" is
+   * an ordinary answer rather than a 404 the client has to catch.
+   */
+  app.get('/api/exercises/:id/last-note', async (req) => {
+    const { id } = idParam.parse(req.params);
+    const { exclude } = z
+      .object({ exclude: z.coerce.number().int().positive().optional() })
+      .parse(req.query);
+    return { note: sessions.lastNote(id, exclude) };
+  });
+
   /* ------------------------------------------------------------ regimens */
 
   app.get('/api/regimens', async () => regimens.list());
@@ -389,6 +402,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send(sessions.logSet(id, logSetBody.parse(req.body)));
   });
 
+  /**
+   * Correct a set already logged — the wrong rep button, or a weight that was
+   * not what the bar actually held. Both fields are optional; what is sent is
+   * what changes.
+   */
+  app.patch('/api/sessions/:id/sets/:setId', async (req, reply) => {
+    const { id, setId } = z
+      .object({
+        id: z.coerce.number().int().positive(),
+        setId: z.coerce.number().int().positive(),
+      })
+      .parse(req.params);
+    const fields = z
+      .object({
+        reps: z.number().int().min(1).max(500).optional(),
+        weightKg: z.number().min(0).max(1000).nullable().optional(),
+      })
+      .parse(req.body ?? {});
+    const updated = sessions.updateSet(id, setId, fields);
+    return updated ?? reply.status(404).send({ error: 'Set not found' });
+  });
+
   app.delete('/api/sessions/:id/sets/:setId', async (req, reply) => {
     const { id, setId } = z
       .object({
@@ -431,20 +466,31 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * How an exercise felt today. The next time it comes round, an easy day puts
-   * one more increment on the bar — see `shared/progress.ts` for the rule.
+   * How an exercise felt today, and a note for next time. The next time it
+   * comes round, an easy day puts one more increment on the bar — see
+   * `shared/progress.ts` for the rule — and the note is shown alongside it.
+   *
+   * Either may be sent on its own: they are written at different moments, and
+   * one must not erase the other.
    */
   app.post('/api/sessions/:id/efforts', async (req, reply) => {
-    const { id } = idParam.parse(req.params);
-    const { exerciseId, regimenItemId, effort } = z
+    const { exerciseId, regimenItemId, ...fields } = z
       .object({
         exerciseId: z.number().int().positive(),
         regimenItemId: z.number().int().positive().nullable().default(null),
-        effort: z.enum(['easy', 'ok', 'hard']),
+        effort: z.enum(['easy', 'ok', 'hard']).optional(),
+        note: z.string().max(500).optional(),
       })
+      .refine(
+        (body) => body.effort !== undefined || body.note !== undefined,
+        'Send an effort, a note, or both',
+      )
       .parse(req.body);
+    const { id } = idParam.parse(req.params);
     if (!sessions.get(id)) return reply.status(404).send({ error: 'Session not found' });
-    return reply.status(201).send(sessions.rateEffort(id, exerciseId, regimenItemId, effort));
+    return reply
+      .status(201)
+      .send(sessions.recordEffort(id, exerciseId, regimenItemId, fields));
   });
 
   app.delete('/api/sessions/:id/efforts/:exerciseId', async (req, reply) => {
