@@ -15,6 +15,9 @@ services:
       - forklift-data:/data
     environment:
       TZ: Europe/Copenhagen
+      # Empty disables error reporting; see deploy/docker-compose.yml.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
 
 volumes:
   forklift-data:

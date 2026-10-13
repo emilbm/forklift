@@ -31,6 +31,8 @@ keeps counting while the screen is off.
   weight was down, what the shoulder did — shown against that exercise when it
   next comes up, along with the reason it was skipped if it was.
 - **History** — every session, set by set, with volume and duration.
+- **Error reporting** — server faults and uncaught browser errors go to
+  GlitchTip when a DSN is set, and nowhere when it isn't.
 
 ### Plates, and why supersets need them
 
@@ -197,11 +199,55 @@ consistent copy while it's running:
 docker exec forklift node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('/data/forklift.db').exec(\"VACUUM INTO '/data/backup.db'\")"
 ```
 
+## Error reporting
+
+With `SENTRY_DSN` set, server faults and uncaught browser errors go to
+GlitchTip — which ingests the Sentry envelope format, so the variable keeps the
+name the protocol uses. There is no SDK: `server/src/sentry.ts` posts envelopes
+with `fetch`, the same reporter grocer and sftp-proxy use.
+
+Leave the DSN empty and reporting is off entirely: nothing is sent and no
+connection is attempted. A malformed DSN stops the container at startup, rather
+than dropping the first real error weeks later.
+
+| Variable | |
+| --- | --- |
+| `SENTRY_DSN` | from GlitchTip, under Settings → Projects → *project* → Client Keys. Empty disables reporting |
+| `SENTRY_ENVIRONMENT` | `production` by default |
+| `SENTRY_SERVER_NAME` | `forklift` in the compose file; defaults to the container hostname |
+| `SENTRY_RELEASE` | defaults to `forklift@<commit sha>` from the image CI built |
+| `SENTRY_MAX_EVENTS_PER_MINUTE` | 30. One bad minute shouldn't become thousands of events |
+
+**Reaching GlitchTip.** `https://glitch.bech.lol` is served by its VM's Caddy
+using Caddy's own CA, which Node does not trust: events fail with
+`UNABLE_TO_GET_ISSUER_CERT_LOCALLY` and are dropped silently. Mount that
+Caddy's `root.crt` into the container and point `NODE_EXTRA_CA_CERTS` at it —
+the lines are in `deploy/docker-compose.yml`, commented out, the same as
+grocer's. From the same Docker host its internal address over plain http needs
+no certificate at all.
+
+**What gets reported.** 5xx faults only. A rejected request — a validation
+error, a name already taken, a session that isn't there — is the caller's
+fault and is answered, not reported. Uncaught errors and unhandled rejections
+in the browser are posted to `/api/client-errors`, which forwards them with the
+server's own DSN, so the phone in the gym never has to reach GlitchTip or trust
+its certificate. A render crash shows a way out instead of a blank screen; the
+sets already logged are on the server, so reloading resumes the workout.
+
+**Proving it works.** `/api/version` reports `errorReporting`, and `GET
+/api/throw` files a deliberate test event:
+
+```bash
+curl -s localhost:8080/api/version
+curl -s localhost:8080/api/throw
+```
+
 ## Which build is running
 
-The home screen shows the version, and `/api/version` returns it. CI stamps the
-commit sha into the image, so it is the quickest way to tell whether the server
-is running the change you just made.
+The home screen shows the version, and `/api/version` returns it, along with
+whether error reporting has a DSN to send to. CI stamps the commit sha into the
+image, so it is the quickest way to tell whether the server is running the
+change you just made.
 
 ## Install on your phone
 
@@ -221,6 +267,8 @@ shared/progress.ts  stepping the weight, and what an easy day earns next time
 server/src/plates.ts    plate arithmetic: what can be loaded, and what can be loaded at once
 server/src/superset.ts  the superset rules, built on that
 server/src/routes.ts    the HTTP API
+server/src/sentry.ts    error reporting to GlitchTip, over the Sentry envelope protocol
+client/src/errors.ts    browser errors, forwarded through the server
 client/src/pages/       one file per screen; WorkoutPage.tsx is the important one
 ```
 
@@ -244,7 +292,9 @@ running instance upgrades its own volume on restart.
 | `GET/POST` | `/api/regimens` | |
 | `GET/PUT/DELETE` | `/api/regimens/:id` | |
 | `GET` | `/api/regimens/:id/superset-pairs` | which pairs can be supersetted, and why not |
-| `GET` | `/api/version` | which build is running |
+| `GET` | `/api/version` | which build is running, and whether errors are reported |
+| `POST` | `/api/client-errors` | an uncaught browser error, forwarded to GlitchTip |
+| `GET` | `/api/throw` | fails on purpose, to prove reporting is wired up |
 | `GET/POST` | `/api/sessions` | history / start a workout |
 | `GET` | `/api/sessions/active` | the unfinished session, if any |
 | `GET/DELETE` | `/api/sessions/:id` | |
@@ -264,8 +314,10 @@ npm test
 ```
 
 Runs the plate arithmetic against known loadings, the superset and skip ordering
-against known regimens, the weight ladder and the progression rule, then boots
-the API on a throwaway database and exercises the whole flow.
+against known regimens, the weight ladder, the progression rule and the DSN and
+stack parsing, then boots the API on a throwaway database and a fake GlitchTip
+and exercises the whole flow — including which failures are reported and which
+are not. No network needed.
 CI runs this plus `npm run typecheck` and a client build before any image is
 published, so `latest` is always a build that passed.
 

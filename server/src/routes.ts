@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { achievableWeights, planLoads, type PlateStock } from './plates.js';
+import type { ErrorReporter } from './sentry.js';
 import { equipment, exercises, plates, regimens, sessions } from './store.js';
 import { sharedEquipment, supersetMatrix, type SupersetInput } from './superset.js';
 import { supersetGroups } from '../../shared/plan.js';
@@ -116,8 +117,20 @@ function supersetEquipmentClash(items: Array<{ exerciseId: number; supersetWithN
   return null;
 }
 
-export async function registerRoutes(app: FastifyInstance): Promise<void> {
-  app.setErrorHandler((err, _req, reply) => {
+/** An uncaught browser error, forwarded by the client so it lands in GlitchTip too. */
+const clientErrorBody = z.object({
+  message: z.string().max(2000),
+  name: z.string().max(200).optional(),
+  stack: z.string().max(20_000).optional(),
+  url: z.string().max(2000).optional(),
+  userAgent: z.string().max(500).optional(),
+});
+
+export async function registerRoutes(
+  app: FastifyInstance,
+  reporter: ErrorReporter,
+): Promise<void> {
+  app.setErrorHandler((err, req, reply) => {
     if (err instanceof z.ZodError) {
       return reply.status(400).send({ error: 'Invalid request', issues: err.issues });
     }
@@ -138,8 +151,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         .status(clientStatus)
         .send({ error: err instanceof Error ? err.message : 'Request rejected' });
     }
+    // Everything above is the request's own fault and is answered as such.
+    // What is left is ours, and is the only thing worth reporting.
     app.log.error(err);
-    return reply.status(500).send({ error: 'Internal server error' });
+    const eventId = reporter.capture(err, {
+      request: { method: req.method, url: req.url },
+      tags: { route: req.routeOptions.url ?? 'unknown' },
+    });
+    return reply.status(500).send({ error: 'Internal server error', eventId });
   });
 
   app.get('/api/health', async () => ({ ok: true }));
@@ -149,7 +168,35 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/version', async () => ({
     version: process.env.FORKLIFT_VERSION ?? 'dev',
     builtAt: process.env.FORKLIFT_BUILT_AT ?? null,
+    // Whether this container has somewhere to send its errors. Answers
+    // "is it broken, or is the DSN just missing?" without reading the logs.
+    errorReporting: reporter.enabled,
   }));
+
+  /**
+   * The browser's uncaught errors, forwarded with the server's own DSN so the
+   * phone never has to reach GlitchTip or trust its certificate.
+   */
+  app.post('/api/client-errors', async (req, reply) => {
+    const body = clientErrorBody.parse(req.body);
+    const err = new Error(body.message);
+    err.name = body.name || 'ClientError';
+    if (body.stack) err.stack = body.stack;
+    const eventId = reporter.capture(err, {
+      logger: 'client',
+      platform: 'javascript',
+      tags: { side: 'client' },
+      request: { url: body.url, headers: body.userAgent ? { 'User-Agent': body.userAgent } : {} },
+    });
+    return reply.status(202).send({ eventId });
+  });
+
+  /** A deliberate failure, to prove error reporting is wired up after a deploy. */
+  app.get('/api/throw', async () => {
+    const err = new Error('Test exception from /api/throw - error reporting is wired up');
+    err.name = 'ForkliftTestError';
+    throw err;
+  });
 
   /* -------------------------------------------------------------- plates */
 

@@ -1,12 +1,14 @@
 /**
  * End-to-end API test. Boots the built server against a throwaway database and
- * walks the whole flow — plates, equipment, exercises, regimens, a workout and
- * its history — with particular attention to what the plates allow.
+ * a fake GlitchTip, then walks the whole flow — plates, equipment, exercises,
+ * regimens, a workout and its history — with particular attention to what the
+ * plates allow, and to which failures are worth reporting.
  *
  * Run with `npm test` from the repo root.
  */
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +47,17 @@ async function call(method, path, body) {
   return { status: res.status, body: parsed };
 }
 
+/** Resolve once `fn` returns something truthy, or give up. */
+async function until(fn, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = fn();
+    if (value) return value;
+    if (Date.now() > deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 async function waitForServer(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -59,9 +72,38 @@ async function waitForServer(timeoutMs = 15000) {
   throw new Error('Server did not start in time');
 }
 
+/*
+ * A fake GlitchTip. It speaks just enough of the ingest API to collect the
+ * envelopes the server posts, so reporting is tested without a network.
+ */
+const envelopes = [];
+const glitchtip = createServer(async (req, res) => {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (req.url === '/api/7/envelope/') {
+    // header line, item line, then the event itself.
+    const [, , event] = Buffer.concat(chunks).toString().split('\n');
+    envelopes.push(JSON.parse(event));
+    res.writeHead(200).end('{}');
+    return;
+  }
+  res.writeHead(404).end();
+});
+const glitchtipPort = await new Promise((resolve) =>
+  glitchtip.listen(0, '127.0.0.1', () => resolve(glitchtip.address().port)),
+);
+
 const server = spawn(process.execPath, ['server/dist/server/src/index.js'], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), FORKLIFT_DATA_DIR: dataDir, LOG_LEVEL: 'silent' },
+  env: {
+    ...process.env,
+    PORT: String(PORT),
+    FORKLIFT_DATA_DIR: dataDir,
+    LOG_LEVEL: 'silent',
+    SENTRY_DSN: `http://publickey@127.0.0.1:${glitchtipPort}/7`,
+    SENTRY_ENVIRONMENT: 'test',
+    SENTRY_SERVER_NAME: 'test-runner',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -71,6 +113,7 @@ server.stderr.on('data', (chunk) => (serverOutput += chunk));
 
 function cleanup() {
   server.kill();
+  glitchtip.close();
   try {
     rmSync(dataDir, { recursive: true, force: true });
   } catch {
@@ -796,6 +839,78 @@ try {
     'reports which build is running',
     version.status === 200 && typeof version.body.version === 'string',
     version.body,
+  );
+  check(
+    'and whether it has anywhere to report errors',
+    version.body.errorReporting === true,
+    version.body,
+  );
+
+  /* ------------------------------------------------------ error reporting */
+
+  const beforeFaults = envelopes.length;
+
+  const thrown = await call('GET', '/throw');
+  check(
+    'a server fault answers 500 with the id of the report',
+    thrown.status === 500 && /^[0-9a-f]{32}$/.test(thrown.body?.eventId ?? ''),
+    thrown.body,
+  );
+
+  const forwarded = await call('POST', '/client-errors', {
+    name: 'TypeError',
+    message: 'weight is undefined',
+    stack:
+      'TypeError: weight is undefined\n    at logSet (https://forklift.local/assets/index.js:3:400)',
+    url: 'https://forklift.local/workout/12',
+    userAgent: 'Mozilla/5.0 (iPhone)',
+  });
+  check('takes an error forwarded from the browser', forwarded.status === 202, forwarded);
+
+  const reported = await until(() =>
+    envelopes.length >= beforeFaults + 2 ? envelopes.slice(beforeFaults) : null,
+  );
+  check('both reach GlitchTip', reported !== null, envelopes.length - beforeFaults);
+
+  const serverFault = reported?.find((e) => e.exception.values[0].type === 'ForkliftTestError');
+  check(
+    'the server fault carries the request it came from',
+    serverFault?.request?.url === '/api/throw' && serverFault?.tags?.route === '/api/throw',
+    serverFault?.request,
+  );
+  check(
+    'and the environment and server name it was configured with',
+    serverFault?.environment === 'test' && serverFault?.server_name === 'test-runner',
+    { environment: serverFault?.environment, server_name: serverFault?.server_name },
+  );
+
+  const fromBrowser = reported?.find((e) => e.logger === 'client');
+  check(
+    'the browser error arrives as a javascript event',
+    fromBrowser?.platform === 'javascript' && fromBrowser?.tags?.side === 'client',
+    fromBrowser?.platform,
+  );
+  check(
+    'with its own stack, read as our code rather than a dependency',
+    fromBrowser?.exception.values[0].stacktrace.frames[0]?.in_app === true &&
+      fromBrowser?.exception.values[0].stacktrace.frames[0]?.function === 'logSet',
+    fromBrowser?.exception.values[0].stacktrace.frames,
+  );
+  check(
+    'and the page it happened on',
+    fromBrowser?.request?.url === 'https://forklift.local/workout/12',
+    fromBrowser?.request,
+  );
+
+  /* A rejected request is the caller's fault, not a fault to report. */
+  const beforeRejections = envelopes.length;
+  const rejected = await call('POST', '/plates', { weightKg: -5, count: 2 });
+  const missing = await call('GET', '/sessions/999999');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  check(
+    'a rejected request is answered, not reported',
+    rejected.status === 400 && missing.status === 404 && envelopes.length === beforeRejections,
+    { rejected: rejected.status, missing: missing.status, reported: envelopes.length - beforeRejections },
   );
 
   /* -------------------------------------------------------- static hosting */

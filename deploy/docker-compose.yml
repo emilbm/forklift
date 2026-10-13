@@ -8,10 +8,14 @@
 #
 #   FORKLIFT_TAG=sha-<full-sha> docker compose up -d
 #
-# Set FORKLIFT_PORT if 8080 is taken on the host. Easiest is a .env file next to
-# this one, so it survives every later `docker compose up`:
+# Set FORKLIFT_PORT if 8080 is taken on the host, and SENTRY_DSN to report
+# errors to GlitchTip. Easiest is a .env file next to this one, so it survives
+# every later `docker compose up`:
 #
 #   echo FORKLIFT_PORT=8095 > .env
+#
+# In Portainer those go in the stack's environment variables instead — it
+# writes them to stack.env, which is what the interpolation below reads.
 
 services:
   forklift:
@@ -29,8 +33,28 @@ services:
       # Named volume by default. Swap for a bind mount (- /srv/forklift:/data)
       # if it's easier to fold into the host's backup job.
       - forklift-data:/data
+      # GlitchTip at https://glitch.bech.lol is served by its VM's Caddy with
+      # Caddy's own CA, which Node does not trust: events fail with
+      # UNABLE_TO_GET_ISSUER_CERT_LOCALLY and are dropped silently. Mount that
+      # Caddy's root.crt and set NODE_EXTRA_CA_CERTS=/certs/glitch-root.crt.
+      # - /home/bech/caddy-glitch-root.crt:/certs/glitch-root.crt:ro
     environment:
       TZ: Europe/Copenhagen
+      # Error reporting to GlitchTip. Empty — the default — disables it
+      # entirely: nothing is sent and no connection is attempted. The DSN is
+      # under Settings → Projects → <project> → Client Keys, and a malformed
+      # one stops the container at startup rather than dropping errors
+      # quietly. Once it is set, GET /api/throw files a test event.
+      #
+      # Over https://glitch.bech.lol the container has to trust that VM's
+      # Caddy root — see the volume above. On the same Docker host, its
+      # internal address over plain http needs no certificate at all.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_SERVER_NAME: ${SENTRY_SERVER_NAME:-forklift}
+      # One bad minute shouldn't become thousands of events.
+      SENTRY_MAX_EVENTS_PER_MINUTE: ${SENTRY_MAX_EVENTS_PER_MINUTE:-30}
+      # NODE_EXTRA_CA_CERTS: /certs/glitch-root.crt
     healthcheck:
       test:
         - CMD
